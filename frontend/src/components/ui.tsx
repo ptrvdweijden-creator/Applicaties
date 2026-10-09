@@ -179,6 +179,14 @@ export function formatDateTime(iso: string) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+const NL_MONTHS = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
+
+/** Notatie voor mutaties: "09 okt, 13:41" (lokale tijd) */
+export function formatMutationDateTime(iso: string) {
+  const d = new Date(iso);
+  return `${pad(d.getDate())} ${NL_MONTHS[d.getMonth()]}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** "YYYY-MM-DD" (opslag) -> "DD/MM/YYYY" (weergave) */
 export function formatDate(isoDate?: string | null) {
   if (!isoDate) return "";
@@ -218,7 +226,7 @@ export function MutationRow({ m, onPress, showArticle = true }: { m: Mutation; o
           </Text>
         )}
         <Text style={styles.rowMeta} numberOfLines={1}>
-          {formatDateTime(m.created_at)} · {m.user_name}
+          {formatMutationDateTime(m.created_at)} · {m.user_name}
         </Text>
         {!!m.project && (
           <Text style={styles.rowMeta} numberOfLines={1} testID={`mutation-project-${m.id}`}>
