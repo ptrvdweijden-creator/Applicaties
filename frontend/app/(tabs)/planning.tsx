@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, errorMessage } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Badge, Chip, OrderStatusBadge, StateView } from "@/src/components/ui";
+import { Badge, Chip, OrderStatusBadge, formatDate, StateView } from "@/src/components/ui";
 import { usesNativeTabs } from "@/src/navigation";
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
 import { Project, SupplierOrder } from "@/src/types";
@@ -146,8 +146,8 @@ function OrderRow({ o, onPress }: { o: SupplierOrder; onPress: () => void }) {
           {o.order_number}
         </Text>
         <Text style={styles.meta}>
-          Besteld {o.order_date}
-          {o.expected_date ? ` · verwacht ${o.expected_date}` : ""}
+          Besteld {formatDate(o.order_date)}
+          {o.expected_date ? ` · verwacht ${formatDate(o.expected_date)}` : ""}
         </Text>
         <View style={styles.bar}>
           <View style={[styles.barFill, { width: `${pct}%` }]} />

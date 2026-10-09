@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, errorMessage } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Button, Input, MutationRow, OrderStatusBadge, SectionTitle, StateView } from "@/src/components/ui";
+import { Button, Input, MutationRow, OrderStatusBadge, formatDate, SectionTitle, StateView } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { hapticSuccess } from "@/src/haptics";
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
@@ -55,8 +55,8 @@ export default function OrderDetail() {
                 {o.order_number}
               </Text>
               <Text style={styles.meta}>
-                {o.supplier} · besteld {o.order_date}
-                {o.expected_date ? ` · verwacht ${o.expected_date}` : ""}
+                {o.supplier} · besteld {formatDate(o.order_date)}
+                {o.expected_date ? ` · verwacht ${formatDate(o.expected_date)}` : ""}
               </Text>
               {!!o.note && <Text style={styles.note}>{o.note}</Text>}
               <Text style={styles.meta} testID="order-totals">

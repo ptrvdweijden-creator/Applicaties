@@ -1602,7 +1602,7 @@ async def dashboard(_: User = Depends(current_user)):
     below_docs = await db.articles.find(below_q).sort("physical_stock", 1).to_list(5)
     since = now() - timedelta(days=1)
     today = await db.mutations.count_documents({"status": "geboekt", "created_at": {"$gte": since}})
-    recent = await db.mutations.find({"status": "geboekt"}).sort("created_at", -1).to_list(8)
+    recent = await db.mutations.find({"status": "geboekt"}).sort([("created_at", -1), ("_id", -1)]).to_list(5)
     return {
         "active_articles": active,
         "below_min_count": below,

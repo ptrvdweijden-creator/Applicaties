@@ -8,13 +8,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, errorMessage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { ArticleLinesEditor, EditLine } from "@/src/components/ArticleLinesEditor";
-import { Button, Input } from "@/src/components/ui";
+import { Button, formatDate, Input, parseEuDate } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { SupplierOrder } from "@/src/types";
 
-const today = () => new Date().toISOString().slice(0, 10);
-const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+const today = () => {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+};
 
 export default function OrderForm() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -41,8 +43,8 @@ export default function OrderForm() {
     if (o) {
       setNum(o.order_number);
       setSupplier(o.supplier);
-      setOrderDate(o.order_date);
-      setExpected(o.expected_date ?? "");
+      setOrderDate(formatDate(o.order_date));
+      setExpected(formatDate(o.expected_date));
       setNote(o.note);
       setLines(
         o.lines.map((l) => ({
@@ -61,16 +63,18 @@ export default function OrderForm() {
   const save = async () => {
     setError(null);
     if (!num.trim()) return setError("Vul een bestelnummer of referentie in");
-    if (!DATE_RX.test(orderDate)) return setError("Besteldatum moet het formaat JJJJ-MM-DD hebben");
-    if (expected && !DATE_RX.test(expected)) return setError("Verwachte leverdatum moet het formaat JJJJ-MM-DD hebben");
+    const orderIso = parseEuDate(orderDate);
+    if (!orderIso) return setError("Besteldatum is ongeldig; gebruik DD/MM/JJJJ");
+    const expectedIso = expected.trim() ? parseEuDate(expected) : "";
+    if (expectedIso === null) return setError("Verwachte leverdatum is ongeldig; gebruik DD/MM/JJJJ");
     if (lines.length === 0) return setError("Voeg minimaal één artikel toe");
     const bad = lines.find((l) => !/^\d+$/.test(l.quantity) || parseInt(l.quantity, 10) < Math.max(1, l.min ?? 0));
     if (bad) return setError(`Ongeldig aantal voor ${bad.article.article_number}`);
     const body = {
       order_number: num,
       supplier,
-      order_date: orderDate,
-      expected_date: expected,
+      order_date: orderIso,
+      expected_date: expectedIso,
       note,
       lines: lines.map((l) => ({ line_id: l.line_id, article_id: l.article.id, quantity: parseInt(l.quantity, 10) })),
     };
@@ -101,10 +105,10 @@ export default function OrderForm() {
           <Input testID="order-supplier-input" label="Leverancier" value={supplier} onChangeText={setSupplier} />
           <View style={{ flexDirection: "row", gap: spacing.md }}>
             <View style={{ flex: 1 }}>
-              <Input testID="order-date-input" label="Besteldatum" value={orderDate} onChangeText={setOrderDate} placeholder="JJJJ-MM-DD" maxLength={10} />
+              <Input testID="order-date-input" label="Besteldatum" value={orderDate} onChangeText={setOrderDate} placeholder="DD/MM/JJJJ" maxLength={10} />
             </View>
             <View style={{ flex: 1 }}>
-              <Input testID="order-expected-input" label="Verwacht (optioneel)" value={expected} onChangeText={setExpected} placeholder="JJJJ-MM-DD" maxLength={10} />
+              <Input testID="order-expected-input" label="Verwacht (optioneel)" value={expected} onChangeText={setExpected} placeholder="DD/MM/JJJJ" maxLength={10} />
             </View>
           </View>
           <Input testID="order-note-input" label="Opmerking (optioneel)" value={note} onChangeText={setNote} />

@@ -23,7 +23,8 @@ export default function DashboardScreen() {
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
   const [search, setSearch] = useState("");
 
-  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dashboard>("/dashboard") });
+  // Ververst automatisch: na eigen boekingen (invalidate), bij terugkeren naar het scherm en elke 15 s (andere gebruikers)
+  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dashboard>("/dashboard"), refetchInterval: 15000 });
   useFocusEffect(
     useCallback(() => {
       q.refetch();

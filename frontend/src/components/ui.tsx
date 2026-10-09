@@ -171,9 +171,29 @@ export function ArticleRow({ article, onPress }: { article: Article; onPress: ()
   );
 }
 
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** Europese notatie DD/MM/YYYY HH:mm (lokale tijd), onafhankelijk van de toestelinstelling. */
 export function formatDateTime(iso: string) {
   const d = new Date(iso);
-  return d.toLocaleString("nl-NL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** "YYYY-MM-DD" (opslag) -> "DD/MM/YYYY" (weergave) */
+export function formatDate(isoDate?: string | null) {
+  if (!isoDate) return "";
+  const [y, m, d] = isoDate.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+/** "DD/MM/YYYY" (invoer) -> "YYYY-MM-DD" of null bij ongeldige datum */
+export function parseEuDate(v: string): string | null {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v.trim());
+  if (!m) return null;
+  const [d, mo, y] = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return `${y}-${pad(mo)}-${pad(d)}`;
 }
 
 export function MutationRow({ m, onPress, showArticle = true }: { m: Mutation; onPress?: () => void; showArticle?: boolean }) {
