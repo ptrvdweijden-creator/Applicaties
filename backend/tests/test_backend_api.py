@@ -143,7 +143,7 @@ class TestArticles:
         aid = d["id"]
         # ontvangst mutation created
         muts = requests.get(f"{BASE}/api/mutations", headers=h_admin, params={"article_id": aid}).json()
-        assert any(m["type"] == "ontvangst" and m["quantity"] == 7 for m in muts)
+        assert any(m["type"] == "beginvoorraad" and m["quantity"] == 7 for m in muts)
 
     def test_patch_cannot_change_article_number(self, h_admin):
         arts = requests.get(f"{BASE}/api/articles", headers=h_admin).json()

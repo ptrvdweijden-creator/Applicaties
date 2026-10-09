@@ -3,7 +3,7 @@ import React, { ComponentProps, forwardRef } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, TextInputProps, View, ViewStyle } from "react-native";
 
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
-import { Article, Mutation, MUTATION_ICONS, MUTATION_LABELS } from "@/src/types";
+import { Article, articleTitle, Mutation, MUTATION_ICONS, MUTATION_LABELS } from "@/src/types";
 
 export type IconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -155,7 +155,7 @@ export function ArticleRow({ article, onPress }: { article: Article; onPress: ()
           {article.below_min && article.active && <Ionicons name="warning" size={14} color={colors.warning} />}
         </View>
         <Text style={styles.rowTitle} numberOfLines={2}>
-          {article.description}
+          {articleTitle(article)}
         </Text>
         <Text style={styles.rowMeta} numberOfLines={1}>
           {article.category} · min. {article.min_stock}

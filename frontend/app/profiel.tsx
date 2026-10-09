@@ -55,6 +55,7 @@ export default function Profile() {
           <View style={styles.list}>
             <Item icon="people-outline" label="Gebruikersbeheer" testID="profile-users-button" onPress={() => router.push("/gebruikers")} />
             <Item icon="add-circle-outline" label="Nieuw artikel" testID="profile-new-article-button" onPress={() => router.push("/artikel-form")} />
+            <Item icon="cloud-upload-outline" label="Artikelen importeren (Excel)" testID="profile-import-button" onPress={() => router.push("/import")} />
           </View>
         </>
       )}

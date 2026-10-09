@@ -49,7 +49,7 @@ export default function ScanScreen() {
       const a = await api<Article>(`/articles/by-barcode/${encodeURIComponent(c)}`);
       hapticSuccess();
       setManual("");
-      router.push(`/artikel/${a.id}`);
+      router.push({ pathname: "/artikel/[id]", params: { id: a.id, scanned: c } });
       setTimeout(() => (lock.current = false), 1200);
     } catch (e) {
       hapticError();

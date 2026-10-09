@@ -6,17 +6,25 @@ Datamodel (uitbreidbaar):
 - mutations: onveranderlijk grootboek van voorraadmutaties (nooit overschreven/verwijderd)
 - projects / reservations: voorbereid voor fase 2; gereserveerde voorraad = som actieve reserveringen
 """
+import io
 import os
 import re
 import logging
+import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, List, Literal, Optional
 
 import jwt
+import requests
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import Response
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import InvalidTokenError
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -33,6 +41,46 @@ client = AsyncIOMotorClient(os.environ["MONGO_URL"], tz_aware=True)
 db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ["JWT_SECRET"]
 TOKEN_HOURS = int(os.environ["ACCESS_TOKEN_HOURS"])
+
+# ---------------------------------------------------------------- Object storage (Emergent managed)
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ["EMERGENT_LLM_KEY"]
+STORAGE_APP_NAME = os.environ["STORAGE_APP_NAME"]
+storage_key: Optional[str] = None
+
+
+def init_storage() -> str:
+    global storage_key
+    if storage_key:
+        return storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    storage_key = resp.json()["storage_key"]
+    return storage_key
+
+
+def _storage_call(method: str, path: str, **kw) -> requests.Response:
+    global storage_key
+    for attempt in range(2):
+        resp = requests.request(method, f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage(), **kw.pop("headers", {})}, timeout=60, **kw)
+        if resp.status_code == 503 and attempt == 0:
+            storage_key = None
+            continue
+        break
+    if resp.status_code == 402:
+        raise HTTPException(402, "Opslagtegoed is op. Uploaden is tijdelijk niet mogelijk.")
+    resp.raise_for_status()
+    return resp
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    return _storage_call("PUT", path, data=data, headers={"Content-Type": content_type}).json()
+
+
+def get_object(path: str) -> bytes:
+    return _storage_call("GET", path).content
+
 
 hasher = PasswordHash.recommended()
 bearer = HTTPBearer(auto_error=False)
@@ -98,6 +146,7 @@ class User(BaseDocument):
 
 class Article(BaseDocument):
     article_number: str
+    name: str = ""
     description: str
     category: str
     barcodes: List[str] = []
@@ -106,8 +155,15 @@ class Article(BaseDocument):
     min_stock: int = 0
     notes: str = ""
     active: bool = True
+    # Visuele barcode (SVG in object storage) + de daadwerkelijk gecodeerde waarde (moet in barcodes staan)
+    barcode_svg: Optional[dict] = None
+    import_batch: Optional[str] = None
     created_at: datetime = Field(default_factory=now)
     updated_at: datetime = Field(default_factory=now)
+
+    @property
+    def title(self) -> str:
+        return self.name or self.description
 
 
 class Mutation(BaseDocument):
@@ -115,7 +171,7 @@ class Mutation(BaseDocument):
     article_id: PyObjectId
     article_number: str
     article_description: str
-    type: MutationType
+    type: Literal["ontvangst", "afboeken", "retour", "correctie", "beginvoorraad"]
     quantity: int  # ingevoerd aantal (bij correctie: getelde voorraad)
     delta: int = 0  # werkelijke wijziging van fysieke voorraad
     stock_before: Optional[int] = None
@@ -168,6 +224,7 @@ def _clean_barcodes(v: List[str]) -> List[str]:
 
 class ArticleCreateIn(BaseModel):
     article_number: str = Field(min_length=1, max_length=50)
+    name: str = Field(default="", max_length=200)
     description: str = Field(min_length=1, max_length=200)
     category: str = Field(min_length=1, max_length=60)
     barcodes: List[str] = []
@@ -193,6 +250,7 @@ class ArticleCreateIn(BaseModel):
 
 class ArticleUpdateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")  # artikelnummer en voorraad zijn hier niet wijzigbaar
+    name: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, min_length=1, max_length=200)
     category: Optional[str] = Field(default=None, min_length=1, max_length=60)
     barcodes: Optional[List[str]] = None
@@ -311,6 +369,11 @@ async def reserved_map(article_ids: List[ObjectId]) -> dict:
 def article_out(a: Article, reserved: int = 0) -> dict:
     d = a.model_dump()
     d.pop("created_at", None)
+    d.pop("import_batch", None)
+    if a.barcode_svg:
+        svg = a.barcode_svg
+        d["barcode_svg"] = {"filename": svg["filename"], "barcode_value": svg["barcode_value"], "size": svg["size"],
+                            "version": svg["path"], "uploaded_at": svg["uploaded_at"].isoformat()}
     d["updated_at"] = a.updated_at.isoformat()
     d["reserved_stock"] = reserved
     d["available_stock"] = a.physical_stock - reserved
@@ -357,7 +420,7 @@ async def list_articles(
         filt["category"] = category
     if q.strip():
         rx = {"$regex": re.escape(q.strip()), "$options": "i"}
-        filt["$or"] = [{"article_number": rx}, {"description": rx}, {"barcodes": rx}]
+        filt["$or"] = [{"article_number": rx}, {"name": rx}, {"description": rx}, {"barcodes": rx}]
     if below_min:
         filt["$expr"] = {"$lt": ["$physical_stock", "$min_stock"]}
     docs = await db.articles.find(filt).sort("article_number", 1).to_list(limit)
@@ -392,10 +455,23 @@ async def create_article(data: ArticleCreateIn, user: User = Depends(require_rol
         raise HTTPException(409, "Een van de barcodes is al in gebruik")
     art.id = str(res.inserted_id)
     if data.initial_stock > 0:
-        # Beginvoorraad wordt als controleerbare ontvangst-mutatie geboekt
-        await book_mutation(MutationIn(client_request_id=f"init-{art.id}", article_id=art.id, type="ontvangst",
-                                       quantity=data.initial_stock, note="Beginvoorraad bij aanmaken artikel"), user)
+        await apply_initial_stock(art, data.initial_stock, user, "Beginvoorraad bij aanmaken artikel")
     return await get_article(art.id, user)
+
+
+async def apply_initial_stock(art: Article, qty: int, user: User, note: str):
+    """Beginvoorraad: één keer vastgelegd als 'beginvoorraad'-mutatie (geen ontvangst), alleen als de stand nog 0 is."""
+    mut = Mutation(client_request_id=f"init-{art.id}", article_id=art.id, article_number=art.article_number,
+                   article_description=art.title, type="beginvoorraad", quantity=qty, delta=qty, stock_before=0,
+                   stock_after=qty, user_id=user.id, user_name=user.name, note=note)
+    try:
+        res = await db.mutations.insert_one(mut.to_mongo())
+    except DuplicateKeyError:
+        return  # beginvoorraad al geboekt
+    upd = await db.articles.update_one({"_id": ObjectId(art.id), "physical_stock": 0},
+                                       {"$set": {"physical_stock": qty, "updated_at": now()}})
+    status = {"status": "geboekt"} if upd.modified_count else {"status": "afgewezen", "reject_reason": "Voorraad was niet 0"}
+    await db.mutations.update_one({"_id": res.inserted_id}, {"$set": status})
 
 
 @api.patch("/articles/{article_id}")
@@ -406,6 +482,10 @@ async def update_article(article_id: str, data: ArticleUpdateIn, user: User = De
             upd[k] = upd[k].strip()
     if "barcodes" in upd:
         await ensure_barcodes_free(upd["barcodes"], article_id)
+        cur = await db.articles.find_one({"_id": oid(article_id)}, {"barcode_svg": 1})
+        svg = (cur or {}).get("barcode_svg")
+        if svg and svg["barcode_value"] not in upd["barcodes"]:
+            raise HTTPException(409, f"Barcode {svg['barcode_value']} hoort bij de gekoppelde SVG. Verwijder eerst de SVG-barcode.")
     upd["updated_at"] = now()
     try:
         doc = await db.articles.find_one_and_update({"_id": oid(article_id)}, {"$set": upd}, return_document=ReturnDocument.AFTER)
@@ -426,6 +506,260 @@ async def link_barcode(article_id: str, data: BarcodeLinkIn, user: User = Depend
             return_document=ReturnDocument.AFTER)
     except DuplicateKeyError:
         raise HTTPException(409, "Deze barcode is al in gebruik")
+    if not doc:
+        raise HTTPException(404, "Artikel niet gevonden")
+    return (await articles_out([doc]))[0]
+
+
+# ---------------------------------------------------------------- Excel-import artikelen
+IMPORT_COLUMNS = ["Artikelnaam", "Artikelcode", "Artikelbeschrijving", "Hoeveelheid", "Categorie", "Minimumhoeveelheid"]
+IMPORT_REQUIRED = {"Artikelnaam", "Artikelcode", "Hoeveelheid", "Categorie", "Minimumhoeveelheid"}
+MAX_IMPORT_ROWS = 2000
+
+
+def _norm_header(v: Any) -> str:
+    return re.sub(r"\s+", "", str(v or "")).lower()
+
+
+def _cell_text(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)  # Excel slaat codes soms als getal op (12345.0)
+    return str(v).strip()
+
+
+def _cell_int(v: Any, label: str, errors: List[str]) -> Optional[int]:
+    t = _cell_text(v).replace(",", ".")
+    if t == "":
+        errors.append(f"{label} ontbreekt")
+        return None
+    try:
+        f = float(t)
+    except ValueError:
+        errors.append(f"{label} '{t}' is geen getal")
+        return None
+    if not f.is_integer():
+        errors.append(f"{label} moet een geheel getal zijn")
+        return None
+    if f < 0:
+        errors.append(f"{label} mag niet negatief zijn")
+        return None
+    return int(f)
+
+
+async def validate_import_rows(raw: List[dict]) -> List[dict]:
+    """Valideert regels (uit Excel of uit de bevestigde preview). Controleert dubbele codes in bestand én database."""
+    existing_codes = {c.lower() for c in await db.articles.distinct("article_number")}
+    categories = {c.lower(): c for c in await db.articles.distinct("category")}
+    seen: dict[str, int] = {}
+    out = []
+    for r in raw:
+        errors: List[str] = []
+        code = _cell_text(r.get("Artikelcode"))
+        name = _cell_text(r.get("Artikelnaam"))
+        desc = _cell_text(r.get("Artikelbeschrijving"))
+        cat = _cell_text(r.get("Categorie"))
+        if not code:
+            errors.append("Artikelcode ontbreekt")
+        elif len(code) > 50:
+            errors.append("Artikelcode is langer dan 50 tekens")
+        if not name:
+            errors.append("Artikelnaam ontbreekt")
+        elif len(name) > 200:
+            errors.append("Artikelnaam is langer dan 200 tekens")
+        if len(desc) > 200:
+            errors.append("Artikelbeschrijving is langer dan 200 tekens")
+        if not cat:
+            errors.append("Categorie ontbreekt")
+        elif len(cat) > 60:
+            errors.append("Categorie is langer dan 60 tekens")
+        qty = _cell_int(r.get("Hoeveelheid"), "Hoeveelheid", errors)
+        mn = _cell_int(r.get("Minimumhoeveelheid"), "Minimumhoeveelheid", errors)
+        if code:
+            key = code.lower()
+            if key in existing_codes:
+                errors.append("Artikelcode bestaat al in de database (wordt niet overschreven)")
+            if key in seen:
+                errors.append(f"Dubbele artikelcode in bestand (ook op regel {seen[key]})")
+            else:
+                seen[key] = r["row"]
+        if cat:
+            cat = categories.setdefault(cat.lower(), cat)  # zelfde schrijfwijze als bestaande categorie
+        out.append({"row": r["row"], "Artikelcode": code, "Artikelnaam": name, "Artikelbeschrijving": desc,
+                    "Categorie": cat, "Hoeveelheid": qty, "Minimumhoeveelheid": mn, "errors": errors, "valid": not errors})
+    return out
+
+
+@api.get("/import/articles/template")
+async def import_template():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Artikelen"
+    ws.append(IMPORT_COLUMNS)
+    for i, col in enumerate(IMPORT_COLUMNS):
+        ws.cell(row=1, column=i + 1).font = Font(bold=True)
+        ws.column_dimensions[chr(65 + i)].width = 24
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="voorbeeld-artikelimport.xlsx"'})
+
+
+@api.post("/import/articles/preview")
+async def import_preview(file: UploadFile = File(...), _: User = Depends(require_roles("admin"))):
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "Alleen Excelbestanden (.xlsx) worden ondersteund")
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Bestand is groter dan 5 MB")
+    try:
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        rows = list(wb.worksheets[0].iter_rows(values_only=True))
+    except Exception:
+        raise HTTPException(400, "Bestand kon niet worden gelezen. Upload een geldig .xlsx-bestand.")
+    header_idx = next((i for i, r in enumerate(rows) if any(_cell_text(v) for v in r)), None)
+    if header_idx is None:
+        raise HTTPException(400, "Het bestand is leeg")
+    header = {_norm_header(v): i for i, v in enumerate(rows[header_idx]) if _cell_text(v)}
+    missing = [c for c in IMPORT_COLUMNS if _norm_header(c) not in header and c in IMPORT_REQUIRED]
+    if missing:
+        raise HTTPException(400, f"Ontbrekende kolom(men): {', '.join(missing)}. Gebruik het voorbeeldbestand.")
+    raw = []
+    for i, r in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+        vals = {c: (r[header[_norm_header(c)]] if _norm_header(c) in header and header[_norm_header(c)] < len(r) else None) for c in IMPORT_COLUMNS}
+        if not any(_cell_text(v) for v in vals.values()):
+            continue  # lege regel
+        raw.append({"row": i, **vals})
+    if not raw:
+        raise HTTPException(400, "Het bestand bevat geen artikelregels")
+    if len(raw) > MAX_IMPORT_ROWS:
+        raise HTTPException(400, f"Maximaal {MAX_IMPORT_ROWS} regels per import")
+    result = await validate_import_rows(raw)
+    return {"filename": file.filename, "rows": result, "valid_count": sum(r["valid"] for r in result),
+            "invalid_count": sum(not r["valid"] for r in result)}
+
+
+class ImportRowIn(BaseModel):
+    row: int
+    Artikelcode: Any = None
+    Artikelnaam: Any = None
+    Artikelbeschrijving: Any = None
+    Hoeveelheid: Any = None
+    Categorie: Any = None
+    Minimumhoeveelheid: Any = None
+
+
+class ImportCommitIn(BaseModel):
+    filename: str = Field(default="", max_length=200)
+    rows: List[ImportRowIn] = Field(max_length=MAX_IMPORT_ROWS)
+
+
+@api.post("/import/articles/commit")
+async def import_commit(data: ImportCommitIn, user: User = Depends(require_roles("admin"))):
+    checked = await validate_import_rows([r.model_dump() for r in data.rows])  # opnieuw controleren vlak voor opslaan
+    batch = f"import-{now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    added, skipped = [], []
+    for r in checked:
+        if not r["valid"]:
+            skipped.append({"row": r["row"], "article_number": r["Artikelcode"], "reason": "; ".join(r["errors"])})
+            continue
+        art = Article(article_number=r["Artikelcode"], name=r["Artikelnaam"], description=r["Artikelbeschrijving"] or r["Artikelnaam"],
+                      category=r["Categorie"], min_stock=r["Minimumhoeveelheid"], physical_stock=0, import_batch=batch)
+        try:
+            res = await db.articles.insert_one(art.to_mongo())
+        except DuplicateKeyError:
+            skipped.append({"row": r["row"], "article_number": r["Artikelcode"], "reason": "Artikelcode bestaat al"})
+            continue
+        art.id = str(res.inserted_id)
+        if r["Hoeveelheid"] > 0:
+            await apply_initial_stock(art, r["Hoeveelheid"], user, f"Beginvoorraad via Excel-import {data.filename}".strip())
+        added.append(r["Artikelcode"])
+    logger.info("Import %s door %s: %d toegevoegd, %d overgeslagen", batch, user.email, len(added), len(skipped))
+    return {"batch": batch, "added_count": len(added), "added": added, "skipped": skipped}
+
+
+# ---------------------------------------------------------------- SVG-barcode per artikel
+MAX_SVG_BYTES = 512 * 1024
+SVG_FORBIDDEN_TAGS = {"script", "foreignobject", "iframe", "object", "embed"}
+
+
+def validate_svg(text: str) -> None:
+    low = text.lower()
+    if "<!doctype" in low or "<!entity" in low:
+        raise HTTPException(400, "SVG-bestand bevat niet-toegestane DOCTYPE/ENTITY-declaraties")
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        raise HTTPException(400, "Bestand is geen geldig SVG-bestand")
+    if root.tag.split("}")[-1].lower() != "svg":
+        raise HTTPException(400, "Bestand is geen SVG-afbeelding")
+    for el in root.iter():
+        if el.tag.split("}")[-1].lower() in SVG_FORBIDDEN_TAGS:
+            raise HTTPException(400, "SVG-bestand bevat niet-toegestane elementen (zoals scripts)")
+        for k, v in el.attrib.items():
+            if k.split("}")[-1].lower().startswith("on") or "javascript:" in str(v).lower():
+                raise HTTPException(400, "SVG-bestand bevat niet-toegestane scripts")
+
+
+class BarcodeSvgIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    svg: str = Field(min_length=1)
+    barcode_value: str = Field(min_length=1, max_length=100)
+
+
+@api.put("/articles/{article_id}/barcode-svg")
+async def upload_barcode_svg(article_id: str, data: BarcodeSvgIn, user: User = Depends(require_roles("admin"))):
+    if not data.filename.lower().endswith(".svg"):
+        raise HTTPException(400, "Alleen SVG-bestanden (.svg) zijn toegestaan")
+    raw = data.svg.encode("utf-8")
+    if len(raw) > MAX_SVG_BYTES:
+        raise HTTPException(400, "SVG-bestand is groter dan 512 KB")
+    validate_svg(data.svg)
+    value = data.barcode_value.strip()
+    art_doc = await db.articles.find_one({"_id": oid(article_id)})
+    if not art_doc:
+        raise HTTPException(404, "Artikel niet gevonden")
+    await ensure_barcodes_free([value], article_id)  # barcodewaarde mag niet bij een ander artikel horen
+    path = f"{STORAGE_APP_NAME}/barcodes/{article_id}/{uuid.uuid4().hex}.svg"
+    try:
+        stored = await run_in_threadpool(put_object, path, raw, "image/svg+xml")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("SVG upload mislukt: %s", e)
+        raise HTTPException(502, "Opslaan van het SVG-bestand is mislukt. Probeer het opnieuw.")
+    meta = {"path": stored.get("path", path), "filename": data.filename, "size": len(raw), "barcode_value": value,
+            "uploaded_at": now(), "uploaded_by": user.id}
+    try:
+        doc = await db.articles.find_one_and_update(
+            {"_id": ObjectId(article_id)},
+            {"$set": {"barcode_svg": meta, "updated_at": now()}, "$addToSet": {"barcodes": value}},
+            return_document=ReturnDocument.AFTER)
+    except DuplicateKeyError:
+        raise HTTPException(409, f"Barcode {value} is al gekoppeld aan een ander artikel")
+    return (await articles_out([doc]))[0]
+
+
+@api.get("/articles/{article_id}/barcode-svg")
+async def get_barcode_svg(article_id: str, _: User = Depends(current_user)):
+    doc = await db.articles.find_one({"_id": oid(article_id)}, {"barcode_svg": 1})
+    svg = (doc or {}).get("barcode_svg")
+    if not svg:
+        raise HTTPException(404, "Geen SVG-barcode gekoppeld")
+    try:
+        content = await run_in_threadpool(get_object, svg["path"])
+    except Exception as e:
+        logger.error("SVG ophalen mislukt: %s", e)
+        raise HTTPException(502, "SVG-barcode kon niet worden geladen")
+    return {"svg": content.decode("utf-8"), "barcode_value": svg["barcode_value"], "filename": svg["filename"]}
+
+
+@api.delete("/articles/{article_id}/barcode-svg")
+async def delete_barcode_svg(article_id: str, _: User = Depends(require_roles("admin"))):
+    """Ontkoppelt de SVG-afbeelding. De barcodewaarde blijft bij het artikel (scannen blijft werken)."""
+    doc = await db.articles.find_one_and_update({"_id": oid(article_id)}, {"$set": {"barcode_svg": None, "updated_at": now()}},
+                                                return_document=ReturnDocument.AFTER)
     if not doc:
         raise HTTPException(404, "Artikel niet gevonden")
     return (await articles_out([doc]))[0]
@@ -464,7 +798,7 @@ async def book_mutation(data: MutationIn, user: User) -> dict:
         return mutation_out(m)
 
     mut = Mutation(client_request_id=data.client_request_id, article_id=art.id, article_number=art.article_number,
-                   article_description=art.description, type=data.type, quantity=data.quantity,
+                   article_description=art.title, type=data.type, quantity=data.quantity,
                    user_id=user.id, user_name=user.name, note=data.note.strip())
     try:
         res = await db.mutations.insert_one(mut.to_mongo())
@@ -551,30 +885,6 @@ async def dashboard(_: User = Depends(current_user)):
 
 
 # ---------------------------------------------------------------- Startup / seed
-SEED_ARTICLES = [
-    ("DB-1001", "Glasklem 90° wand-glas chroom", "Glasklemmen", "8712345000011", 40, 20),
-    ("DB-1002", "Glasklem 180° glas-glas chroom", "Glasklemmen", "8712345000028", 25, 15),
-    ("DB-1003", "Glasklem 90° wand-glas mat zwart", "Glasklemmen", "8712345000035", 8, 10),
-    ("DB-1004", "Glasklem 135° glas-glas RVS", "Glasklemmen", "8712345000042", 12, 6),
-    ("DB-2001", "Scharnier wand-glas 90° chroom", "Scharnieren", "8712345000059", 18, 10),
-    ("DB-2002", "Scharnier glas-glas 180° chroom", "Scharnieren", "8712345000066", 6, 8),
-    ("DB-2003", "Scharnier wand-glas 90° mat zwart", "Scharnieren", "8712345000073", 14, 8),
-    ("DB-2004", "Pendelscharnier met hefsysteem RVS", "Scharnieren", "8712345000080", 4, 4),
-    ("DB-3001", "Stabilisatiestang 1000 mm chroom", "Stabilisatiestangen", "8712345000097", 9, 5),
-    ("DB-3002", "Stabilisatiestang 1200 mm mat zwart", "Stabilisatiestangen", "8712345000103", 3, 5),
-    ("DB-3003", "Plafondsteun stabilisatiestang RVS", "Stabilisatiestangen", "8712345000110", 11, 4),
-    ("DB-4001", "Deurgreep rond 300 mm chroom", "Grepen", "8712345000127", 15, 6),
-    ("DB-4002", "Knopgreep Ø35 mm mat zwart", "Grepen", "8712345000134", 22, 10),
-    ("DB-4003", "Trekker/greep combinatie 450 mm RVS", "Grepen", "8712345000141", 2, 3),
-    ("DB-5001", "Afdichtingsprofiel 180° 8 mm 2000 mm", "Profielen & strips", "8712345000158", 30, 20),
-    ("DB-5002", "Waterkering met magneet 90° 2000 mm", "Profielen & strips", "8712345000165", 17, 15),
-    ("DB-5003", "Druipprofiel onderzijde 8 mm 1000 mm", "Profielen & strips", "8712345000172", 45, 25),
-    ("DB-6001", "Muurprofiel U 8 mm 2000 mm aluminium", "Wandprofielen", "8712345000189", 7, 6),
-    ("DB-6002", "Schuifdeur rollenset (4 st.) RVS", "Schuifsystemen", "8712345000196", 5, 4),
-    ("DB-6003", "Schuifdeurrail 1500 mm RVS", "Schuifsystemen", "8712345000202", 1, 2),
-]
-
-
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
@@ -595,14 +905,10 @@ async def startup():
         if not await db.users.find_one({"email": email.lower()}):
             await db.users.insert_one(User(email=email.lower(), name=name, role=role, password_hash=hasher.hash(pw)).to_mongo())
 
-    if await db.articles.count_documents({}) == 0:
-        admin = User.from_mongo(await db.users.find_one({"email": os.environ["ADMIN_EMAIL"].lower()}))
-        for num, desc, cat, bc, stock, mn in SEED_ARTICLES:
-            res = await db.articles.insert_one(Article(article_number=num, description=desc, category=cat, barcodes=[bc],
-                                                       min_stock=mn).to_mongo())
-            await book_mutation(MutationIn(client_request_id=f"seed-{num}", article_id=str(res.inserted_id), type="ontvangst",
-                                           quantity=stock, note="Beginvoorraad (demo-data)"), admin)
-        logger.info("Demo-artikelen aangemaakt")
+    try:
+        await run_in_threadpool(init_storage)
+    except Exception as e:  # opslag niet bereikbaar: rest van de app blijft werken
+        logger.error("Object storage init mislukt: %s", e)
 
 
 @app.on_event("shutdown")

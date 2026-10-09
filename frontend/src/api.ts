@@ -1,6 +1,7 @@
 import { storage } from "@/src/utils/storage";
 
-const BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+export const API_BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+const BASE = API_BASE;
 export const TOKEN_KEY = "voorraad_auth_token";
 
 export class ApiError extends Error {
@@ -41,17 +42,18 @@ function parseDetail(detail: unknown): string {
   return "Er is iets misgegaan. Probeer het opnieuw.";
 }
 
-export async function api<T>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
+export async function api<T>(path: string, opts: { method?: string; body?: unknown; form?: FormData } = {}): Promise<T> {
   const token = await storage.secureGet<string | null>(TOKEN_KEY, null);
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, {
-      method: opts.method ?? "GET",
+      method: opts.method ?? (opts.form ? "POST" : "GET"),
       headers: {
-        "Content-Type": "application/json",
+        // Bij FormData geen Content-Type zetten: de runtime voegt de multipart-boundary toe
+        ...(opts.form ? {} : { "Content-Type": "application/json" }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
     });
   } catch {
     throw new ApiError("Geen verbinding met de server. Controleer uw internetverbinding.", 0);

@@ -28,6 +28,7 @@ export default function ArticleForm() {
   const cats = useQuery({ queryKey: ["categories"], queryFn: () => api<string[]>("/categories") });
 
   const [num, setNum] = useState("");
+  const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [cat, setCat] = useState("");
   const [unit, setUnit] = useState("stuks");
@@ -45,6 +46,7 @@ export default function ArticleForm() {
     const a = existing.data;
     if (a) {
       setNum(a.article_number);
+      setName(a.name);
       setDesc(a.description);
       setCat(a.category);
       setUnit(a.unit);
@@ -86,6 +88,7 @@ export default function ArticleForm() {
     setSaving(true);
     try {
       const body = {
+        name,
         description: desc,
         category: cat,
         unit,
@@ -128,6 +131,7 @@ export default function ArticleForm() {
             hint={editing ? "Het artikelnummer is uniek en kan niet worden gewijzigd" : "Uniek intern nummer; kan later niet worden gewijzigd"}
             style={{ fontFamily: mono }}
           />
+          <Input testID="form-name-input" label="Artikelnaam" value={name} onChangeText={setName} placeholder="Bijv. Glasklem 90° chroom" />
           <Input testID="form-description-input" label="Omschrijving" value={desc} onChangeText={setDesc} placeholder="Bijv. Glasklem 90° chroom" error={errors.description} />
           <Input testID="form-category-input" label="Categorie" value={cat} onChangeText={setCat} placeholder="Bijv. Scharnieren" error={errors.category} />
           {(cats.data ?? []).length > 0 && (

@@ -1,3 +1,4 @@
+import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
@@ -7,13 +8,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, errorMessage } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { BarcodeSvgSection } from "@/src/components/BarcodeSvg";
 import { MutationSheet } from "@/src/components/MutationSheet";
 import { Badge, Button, MutationRow, SectionTitle, StateView } from "@/src/components/ui";
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
-import { Article, Mutation } from "@/src/types";
+import { Article, articleTitle, Mutation } from "@/src/types";
 
 export default function ArticleDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, scanned } = useLocalSearchParams<{ id: string; scanned?: string }>();
   const { isAdmin, canMutate } = useAuth();
   const router = useRouter();
   const styles = useStyles();
@@ -61,13 +63,36 @@ export default function ArticleDetail() {
                 {a.active ? <Badge label="Actief" tone="success" testID="article-status" /> : <Badge label="Inactief" tone="error" testID="article-status" />}
                 {a.below_min && a.active && <Badge label="Onder minimum" tone="warning" testID="article-below-min-badge" />}
               </View>
-              <Text style={styles.title} testID="article-description">
-                {a.description}
+              <Text style={styles.title} testID="article-title">
+                {articleTitle(a)}
               </Text>
+              {!!a.name && a.description !== a.name && (
+                <Text style={styles.desc} testID="article-description">
+                  {a.description}
+                </Text>
+              )}
               <Text style={styles.sku} testID="article-number">
                 {a.article_number}
               </Text>
             </Animated.View>
+
+            {!!scanned && (
+              <View
+                testID="article-scan-check"
+                style={[styles.scanCheck, { backgroundColor: a.barcodes.includes(scanned) ? colors.successSoft : colors.errorSoft }]}
+              >
+                <Ionicons
+                  name={a.barcodes.includes(scanned) ? "checkmark-circle" : "alert-circle"}
+                  size={20}
+                  color={a.barcodes.includes(scanned) ? colors.onSuccessSoft : colors.onErrorSoft}
+                />
+                <Text style={[styles.scanCheckText, { color: a.barcodes.includes(scanned) ? colors.onSuccessSoft : colors.onErrorSoft }]}>
+                  {a.barcodes.includes(scanned)
+                    ? `Gescande waarde ${scanned} komt overeen met de opgeslagen barcode van dit artikel`
+                    : `Gescande waarde ${scanned} komt niet overeen met dit artikel`}
+                </Text>
+              </View>
+            )}
 
             <Animated.View entering={FadeInDown.delay(60).duration(250)} style={styles.stocks}>
               <View style={[styles.stock, styles.stockMain]} testID="article-physical-stock">
@@ -96,6 +121,9 @@ export default function ArticleDetail() {
               <Meta label="Minimumvoorraad" value={`${a.min_stock} ${a.unit}`} testID="meta-min-stock" />
               <Meta label="Opmerkingen" value={a.notes || "—"} testID="meta-notes" last />
             </View>
+
+            <SectionTitle title="Barcode-afbeelding (SVG)" />
+            <BarcodeSvgSection article={a} />
 
             <SectionTitle title="Mutatiehistorie" />
             <View style={styles.card}>
@@ -140,6 +168,9 @@ const useStyles = makeStyles((c) => ({
   top: { padding: spacing.lg, gap: spacing.sm },
   tags: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   title: { fontSize: fontSize["2xl"], fontWeight: "700", color: c.onSurface, letterSpacing: -0.3 },
+  desc: { fontSize: fontSize.base, color: c.onSurfaceTertiary },
+  scanCheck: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginHorizontal: spacing.lg, marginBottom: spacing.md, padding: spacing.md, borderRadius: radius.md },
+  scanCheckText: { flex: 1, fontSize: fontSize.base, fontWeight: "500" },
   sku: { fontFamily: mono, fontSize: fontSize.lg, color: c.brandSecondary, fontWeight: "600" },
   stocks: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.lg },
   stock: { flex: 1, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.md, gap: 2 },

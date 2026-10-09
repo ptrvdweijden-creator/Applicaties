@@ -60,10 +60,16 @@ export default function ArtikelenScreen() {
           <View style={styles.titleRow}>
             <Text style={styles.title}>Artikelen</Text>
             {isAdmin && (
-              <Pressable testID="articles-add-button" onPress={() => router.push("/artikel-form")} style={styles.addBtn}>
-                <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
-                <Text style={styles.addText}>Nieuw</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                <Pressable testID="articles-import-button" onPress={() => router.push("/import")} style={[styles.addBtn, styles.importBtn]}>
+                  <Ionicons name="cloud-upload-outline" size={18} color={colors.onBrandTertiary} />
+                  <Text style={[styles.addText, { color: colors.onBrandTertiary }]}>Import</Text>
+                </Pressable>
+                <Pressable testID="articles-add-button" onPress={() => router.push("/artikel-form")} style={styles.addBtn}>
+                  <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
+                  <Text style={styles.addText}>Nieuw</Text>
+                </Pressable>
+              </View>
             )}
           </View>
           <View style={styles.search}>
@@ -138,6 +144,7 @@ const useStyles = makeStyles((c) => ({
   title: { fontSize: 28, fontWeight: "800", color: c.onSurface, letterSpacing: -0.5 },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: c.brandPrimary, paddingHorizontal: spacing.md, height: 40, borderRadius: radius.pill },
   addText: { color: c.onBrandPrimary, fontWeight: "600", fontSize: fontSize.base },
+  importBtn: { backgroundColor: c.brandTertiary },
   search: {
     marginHorizontal: spacing.lg,
     flexDirection: "row",

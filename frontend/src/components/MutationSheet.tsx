@@ -11,7 +11,7 @@ import { Button, IconName, Input } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { hapticError, hapticLight, hapticSuccess } from "@/src/haptics";
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
-import { Article, MUTATION_ICONS, MUTATION_LABELS, MutationType, newRequestId } from "@/src/types";
+import { Article, articleTitle, MUTATION_ICONS, MUTATION_LABELS, MutationType, newRequestId } from "@/src/types";
 
 const TYPES: MutationType[] = ["afboeken", "ontvangst", "retour", "correctie"];
 const HINTS: Record<MutationType, string> = {
@@ -117,7 +117,7 @@ export function MutationSheet({ article, visible, onClose }: { article: Article;
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>Mutatie boeken</Text>
               <Text style={styles.subtitle} numberOfLines={1}>
-                <Text style={{ fontFamily: mono }}>{article.article_number}</Text> · {article.description}
+                <Text style={{ fontFamily: mono }}>{article.article_number}</Text> · {articleTitle(article)}
               </Text>
             </View>
             <Pressable onPress={onClose} hitSlop={12} testID="mutation-sheet-close" style={styles.close}>

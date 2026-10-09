@@ -1,14 +1,19 @@
 export type Role = "admin" | "magazijn" | "monteur";
 export type MutationType = "ontvangst" | "afboeken" | "retour" | "correctie";
+export type MutationKind = MutationType | "beginvoorraad";
 
 export type User = { id: string; email: string; name: string; role: Role; active: boolean };
+
+export type BarcodeSvg = { filename: string; barcode_value: string; size: number; version: string; uploaded_at: string };
 
 export type Article = {
   id: string;
   article_number: string;
+  name: string;
   description: string;
   category: string;
   barcodes: string[];
+  barcode_svg: BarcodeSvg | null;
   unit: string;
   physical_stock: number;
   reserved_stock: number;
@@ -25,7 +30,7 @@ export type Mutation = {
   article_id: string;
   article_number: string;
   article_description: string;
-  type: MutationType;
+  type: MutationKind;
   quantity: number;
   delta: number;
   stock_before: number;
@@ -49,19 +54,23 @@ export const ROLE_LABELS: Record<Role, string> = {
   monteur: "Monteur",
 };
 
-export const MUTATION_LABELS: Record<MutationType, string> = {
+export const MUTATION_LABELS: Record<MutationKind, string> = {
   ontvangst: "Ontvangst",
   afboeken: "Afboeken",
   retour: "Retour",
   correctie: "Correctie",
+  beginvoorraad: "Beginvoorraad",
 };
 
-export const MUTATION_ICONS: Record<MutationType, string> = {
+export const MUTATION_ICONS: Record<MutationKind, string> = {
   ontvangst: "arrow-down-circle",
   afboeken: "arrow-up-circle",
   retour: "return-down-back",
   correctie: "clipboard",
+  beginvoorraad: "flag",
 };
+
+export const articleTitle = (a: Pick<Article, "name" | "description">) => a.name || a.description;
 
 export const MUTATION_ROLES: Record<MutationType, Role[]> = {
   afboeken: ["admin", "magazijn", "monteur"],

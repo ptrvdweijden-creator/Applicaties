@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 2 - regression + new features (Excel-import + per-article SVG barcode). Backend: 12/12 NEW pytest tests PASS (test_import_and_barcode_svg.py): template .xlsx with correct 6 Dutch headers; preview rejects monteur (403), non-xlsx (400) and missing column (400); valid xlsx returns rows with per-row errors - row 4 duplicate code in file + row 5 Artikelnaam ontbreekt both correctly flagged; commit added 2 and on repeat added 0 with 2 skipped reasons; physical_stock = Hoeveelheid, exactly one 'beginvoorraad' mutation per imported article (no ontvangst), subsequent afboeken/ontvangst mutations work and update stock correctly; PUT barcode-svg rejects non-.svg filename (400) and <script> payload (400); upload succeeds, GET returns the stored svg + value + filename, DELETE unlinks SVG but keeps barcode value, GET then 404 while /api/articles/by-barcode/{value} still resolves to correct article; duplicate barcode value across articles returns 409; PATCH removing the svg-linked barcode -> 409 (business rule enforced); monteur PUT -> 403. Regression suite (test_backend_api.py) 27/32 pass; 5 pre-existing failures are stale assertions tied to removed demo data (expects >=20 articles / DB-1001 / 8712345000011 / 'glasklem') - NOT bugs. test_create_article_with_initial_stock updated: beginvoorraad instead of ontvangst (matches current PRD). Frontend (390x844 mobile, admin): Artikelen tab shows Import pill (testID articles-import-button) that opens /import; template button + file picker open via expect_file_chooser; uploading /tmp/test_import.xlsx shows preview counts 2 'Klaar voor import' / 2 'Met fouten (overslaan)', row cards 4 & 5 display correct Dutch errors ('Dubbele artikelcode in bestand (ook op regel 2)' and 'Artikelnaam ontbreekt'); confirm -> result screen 2 artikelen succesvol toegevoegd + skipped list; back to /artikelen now lists 22 artikelen incl TEST-X-001 and TEST-X-002. On TEST-X-002 detail: article-title 'TEST Greep chroom', article-number TEST-X-002, physical stock 3, mutatiehistorie card 'Beginvoorraad +3' with note 'Beginvoorraad via Excel-import test_import.xlsx' (NO ontvangst). SVG upload sheet: pick /tmp/test_barcode.svg, suggestion chip barcode-svg-suggestion-8719999000017 appears, custom value UITBC1791541181 saved -> barcode-svg-image + barcode-svg-value visible; reload keeps svg (persistence OK). Scannen tab manual input of UITBC1791541181 opens correct article with green banner article-scan-check 'Gescande waarde ... komt overeen met de opgeslagen barcode van dit artikel'. artikel-form shows new form-name-input (Artikelnaam) + existing form-article-number-input. Monteur: /artikelen - geen Import en geen Nieuw knop; op TEST-X-002 geen barcode-svg-upload-button, geen replace/delete, geen article-edit-button; barcode-svg-section nog zichtbaar met 'Geen SVG-barcode gekoppeld' tekst (correct). No React Native red screens; only non-blocking warnings 'shadow* style props deprecated' and 'props.pointerEvents is deprecated'. No deprecated expo packages found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "RN Web warning", "issue": "Non-blocking console warning: 'shadow*' style props are deprecated. Use 'boxShadow'. Affects multiple styled components (does not break UI)."},
+      {"component": "RN Web warning", "issue": "Non-blocking console warning: props.pointerEvents is deprecated. Use style.pointerEvents."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_import_and_barcode_svg.py",
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "No functional fixes required. All PRD items (Excel-import preview/commit/template, beginvoorraad semantics, per-article SVG upload + persistence + unique value, scan match banner, RBAC for monteur, form-name-input) verified end-to-end.",
+    "Optional cleanup (non-blocking): replace deprecated RN Web 'shadow*' style props with 'boxShadow' and props.pointerEvents with style.pointerEvents to silence console warnings.",
+    "Housekeeping: stale assertions in /app/backend/tests/test_backend_api.py (TestArticles::test_list_articles >=20, test_search_q 'glasklem', test_by_barcode_known 8712345000011, test_create_duplicate_article_number DB-1001, test_create_duplicate_barcode 8712345000011) still reference the demo seed data that the user deliberately deleted. Either reseed or weaken those 5 assertions. Not a product bug."
+  ],
+  "critical_code_review_comments": [
+    "server.py apply_initial_stock uses client_request_id='init-{art.id}' which is good for idempotency (prevents double beginvoorraad on retry).",
+    "server.py import_commit re-runs validate_import_rows just before insert - correct to re-check existing_codes in case of concurrent imports; still uses $addToSet + unique index for final guarantee.",
+    "PATCH-cannot-remove-svg-linked-barcode is enforced server-side (409) which is good; UI should also hide that barcode from the removable chips when linked to the SVG to avoid confusing error.",
+    "SVG storage path /{STORAGE_APP_NAME}/barcodes/{article_id}/{uuid}.svg is immutable per upload; previous file is replaced in Mongo meta but not deleted from object storage - minor orphaning on 'Vervangen'."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_import_and_barcode_svg.py (NEW)",
+    "/app/backend/tests/test_backend_api.py (fixed stale 'ontvangst' assertion to 'beginvoorraad' for initial_stock test)"
+  ],
+  "success_rate": {
+    "backend": "100% on new features (12/12); regression 27/32 - 5 failures are stale assertions on deleted demo data, not real bugs",
+    "frontend": "100% of requested flows (import preview+commit, beginvoorraad in history, SVG upload+persist+reload, scan match banner, monteur RBAC, form-name-input)"
+  },
+  "seed_data_creation": "Created TEST-prefixed articles via UI import (TEST-X-001 'TEST Glasklem chroom' qty 12, TEST-X-002 'TEST Greep chroom' qty 3) and via API in tests (TEST-IMP-*-A, TEST-IMP-*-B, several TEST-SVG-*). TEST-X-002 has SVG uploaded with barcode value UITBC1791541181. Previous CHK-* articles untouched. All TEST-* can be safely deleted by user as instructed. No new users created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Preview URL = EXPO_PUBLIC_BACKEND_URL = https://voorraad-scan.preview.emergentagent.com (note: PUBLIC prefix). Key testIDs verified live: articles-import-button, import-template-button, import-pick-button (triggers browser file-chooser - use page.expect_file_chooser()), import-valid-count/import-invalid-count, import-row-{n}, import-confirm-button, import-added-count, import-skipped, import-to-articles-button, barcode-svg-section, barcode-svg-upload-button, barcode-svg-pick-button (file-chooser), barcode-svg-suggestion-{value}, barcode-svg-value-input, barcode-svg-save-button, barcode-svg-image, barcode-svg-value, barcode-svg-replace-button, barcode-svg-delete-button+confirm, article-scan-check, scan-manual-input, scan-manual-submit, form-name-input, tab-scannen/tab-artikelen (hidden on stacked screens like /artikel/{id} - navigate via /artikelen first or back button). Backend endpoints: GET /api/import/articles/template, POST /api/import/articles/preview (multipart 'file'), POST /api/import/articles/commit {filename, rows:[{row,Artikelcode,Artikelnaam,Artikelbeschrijving,Hoeveelheid,Categorie,Minimumhoeveelheid}]}, PUT /api/articles/{id}/barcode-svg {filename, svg, barcode_value}, GET/DELETE same path, GET /api/articles/by-barcode/{value}. Mutation type 'beginvoorraad' is a NEW enum value - DO NOT assume ontvangst anymore for initial_stock.",
+  "rca_of_issue": "N/A - no bugs found in the implementation under review."
+}

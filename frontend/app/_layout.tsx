@@ -44,6 +44,7 @@ function AuthGate() {
       <Stack.Screen name="koppel" options={{ headerShown: true, title: "Barcode koppelen" }} />
       <Stack.Screen name="profiel" options={{ headerShown: true, title: "Profiel" }} />
       <Stack.Screen name="gebruikers" options={{ headerShown: true, title: "Gebruikersbeheer" }} />
+      <Stack.Screen name="import" options={{ headerShown: true, title: "Artikelen importeren" }} />
     </Stack>
   );
 }

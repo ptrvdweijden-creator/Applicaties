@@ -17,6 +17,13 @@ Nederlandstalige mobiele voorraadbeheer-app voor ±300 artikelen douchebeslag: a
 - Login/rollen, dashboard, artikelen zoeken/filteren, artikeldetail (fysiek/gereserveerd/beschikbaar), mutatie-sheet, mutatiehistorie, scanner met permissie-afhandeling, onbekende barcode koppelen (beheerder), artikel aanmaken/bewerken, gebruikersbeheer
 - Getest: 32/32 backend-tests, alle frontend-flows (incl. 10 gelijktijdige afboekingen → nooit negatief)
 
+## Iteratie 2 (okt 2026)
+- Demo- en testartikelen + bijbehorende mutaties verwijderd; demo-seed van artikelen uit startup gehaald (gebruikers blijven; 2 testaccounts @test.local gedeactiveerd)
+- Excel-import (/import, beheerder): voorbeeldbestand, preview met foutmeldingen, dubbele codes (bestand + database) overgeslagen, resultaatoverzicht. Kolommen: Artikelnaam→name, Artikelcode→article_number, Artikelbeschrijving→description, Hoeveelheid→beginvoorraad, Categorie, Minimumhoeveelheid
+- Beginvoorraad = één mutatie type 'beginvoorraad' (geen ontvangst), ook bij handmatig aanmaken
+- SVG-barcode per artikel (Emergent Object Storage), met aparte barcodewaarde (in barcodes, uniek); vervangen/verwijderen; scan toont overeenkomst-banner
+- Nieuw veld Artikelnaam (optioneel) in artikelformulier
+
 ## Backlog
 - P1: CSV/Excel-import artikelen; projecten + reserveringen; wachtwoord wijzigen
 - P2: inkomende bestellingen, verbruiksanalyse, besteladvies bij lange levertijden, export mutaties
