@@ -30,6 +30,12 @@ Nederlandstalige mobiele voorraadbeheer-app voor ±300 artikelen douchebeslag: a
 - Afboeken optioneel op reservering: fysiek daalt, reservering daalt, beschikbaar niet dubbel; vrij afboeken beperkt tot beschikbaar
 - UI: sectie Reserveringen op artikeldetail, segment Reserveringen in Mutaties-tab, projectkeuze in afboeken-sheet
 
+## Iteratie 4 (okt 2026) – Planning-tab
+- Nieuw tabblad Planning met Projectreserveringen en Leveranciersbestellingen
+- projects (unieke naam, status actief/vervallen); reserveringen gekoppeld via project_id; één actieve regel per project+artikel (unieke index); project aanmaken met meerdere regels (alles-of-niets), regel toevoegen, project vrijgeven
+- supplier_orders met regels (besteld/ontvangen/open), statussen besteld/gedeeltelijk/volledig ontvangen, optimistische versie; binnenboeken idempotent (supplier_receipts) en als ontvangst-mutatie met supplier_order_number
+- Alleen admin beheert; overige rollen alleen lezen (backend 403)
+
 ## Backlog
 - P1: CSV/Excel-import artikelen; projecten + reserveringen; wachtwoord wijzigen
 - P2: inkomende bestellingen, verbruiksanalyse, besteladvies bij lange levertijden, export mutaties

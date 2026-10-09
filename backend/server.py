@@ -188,6 +188,8 @@ class Mutation(BaseDocument):
     reservation_id: Optional[PyObjectId] = None  # afboeking op een projectreservering
     project: Optional[str] = None
     reservation_consumed: int = 0  # aantal waarmee de reservering is verminderd
+    supplier_order_id: Optional[PyObjectId] = None  # ontvangst van leveranciersbestelling
+    supplier_order_number: Optional[str] = None
     created_at: datetime = Field(default_factory=now)
 
 
@@ -200,6 +202,7 @@ class Reservation(BaseDocument):
     article_number: str
     article_description: str
     project: str
+    project_id: Optional[PyObjectId] = None
     quantity: int  # nog openstaand gereserveerd aantal
     original_quantity: int
     consumed_quantity: int = 0  # al afgeboekt op deze reservering
@@ -1048,18 +1051,476 @@ async def create_reservation(data: ReservationCreateIn, user: User = Depends(req
     art = Article.from_mongo(art_doc)
     if not art.active:
         raise HTTPException(400, "Artikel is inactief; reserveren is niet mogelijk")
-    await reserve_stock(art.id, data.quantity, art.unit)
-    r = Reservation(client_request_id=data.client_request_id, article_id=art.id, article_number=art.article_number,
-                    article_description=art.title, project=data.project, quantity=data.quantity,
-                    original_quantity=data.quantity, note=data.note.strip(), created_by=user.name)
+    project = await find_or_create_project(data.project, user.name)
+    r = await reserve_line(project, art, data.quantity, data.note, user, data.client_request_id)
+    return reservation_out(r)
+
+
+# ---------------------------------------------------------------- Projecten
+class Project(BaseDocument):
+    name: str
+    name_lower: str
+    note: str = ""
+    status: Literal["actief", "vervallen"] = "actief"
+    created_by: str
+    created_at: datetime = Field(default_factory=now)
+    updated_at: datetime = Field(default_factory=now)
+
+
+async def find_or_create_project(name: str, created_by: str) -> Project:
+    name = name.strip()
+    doc = await db.projects.find_one({"name_lower": name.lower()})
+    if not doc:
+        try:
+            await db.projects.insert_one(Project(name=name, name_lower=name.lower(), created_by=created_by).to_mongo())
+        except DuplicateKeyError:
+            pass
+        doc = await db.projects.find_one({"name_lower": name.lower()})
+    p = Project.from_mongo(doc)
+    if p.status != "actief":
+        raise HTTPException(409, f"Project {p.name} is vervallen; maak een nieuw project aan")
+    return p
+
+
+async def reserve_line(project: Project, art: Article, qty: int, note: str, user: User, client_request_id: str) -> Reservation:
+    """Eén reserveringsregel: geen dubbele actieve regel per project+artikel, beschikbaar nooit negatief."""
+    dup = await db.reservations.find_one({"project_id": project.id, "article_id": art.id, "status": "actief"})
+    if dup:
+        raise HTTPException(409, f"Artikel {art.article_number} is al gereserveerd voor project {project.name} "
+                                 f"({dup['quantity']} {art.unit}). Wijzig het bestaande aantal.")
+    await reserve_stock(art.id, qty, art.unit)
+    r = Reservation(client_request_id=client_request_id, article_id=art.id, article_number=art.article_number,
+                    article_description=art.title, project=project.name, project_id=project.id, quantity=qty,
+                    original_quantity=qty, note=note.strip(), created_by=user.name)
     try:
         res = await db.reservations.insert_one(r.to_mongo())
-    except DuplicateKeyError:
-        await db.articles.update_one({"_id": ObjectId(art.id)}, {"$inc": {"reserved_stock": -data.quantity}})
-        return reservation_out(Reservation.from_mongo(await db.reservations.find_one({"client_request_id": data.client_request_id})))
+    except DuplicateKeyError as e:
+        await db.articles.update_one({"_id": ObjectId(art.id)}, {"$inc": {"reserved_stock": -qty}})
+        if "client_request_id" in str(e):
+            return Reservation.from_mongo(await db.reservations.find_one({"client_request_id": client_request_id}))
+        raise HTTPException(409, f"Artikel {art.article_number} is al gereserveerd voor project {project.name}")
     r.id = str(res.inserted_id)
     await log_reservation_event(r, "aangemaakt", 0, r.quantity, user, note=r.note, changes=f"{r.quantity} gereserveerd voor {r.project}")
-    return reservation_out(r)
+    return r
+
+
+class ProjectLineIn(BaseModel):
+    article_id: str
+    quantity: int = Field(ge=1, le=100000)
+
+
+class ProjectCreateIn(BaseModel):
+    client_request_id: str = Field(min_length=8, max_length=80)
+    name: str = Field(min_length=1, max_length=100)
+    note: str = Field(default="", max_length=500)
+    lines: List[ProjectLineIn] = Field(default=[], max_length=200)
+
+
+class ProjectUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class ProjectAddLineIn(ProjectLineIn):
+    client_request_id: str = Field(min_length=8, max_length=80)
+    note: str = Field(default="", max_length=500)
+
+
+async def project_out(p: Project, with_lines: bool = False) -> dict:
+    d = p.model_dump(exclude={"name_lower"})
+    d["created_at"] = p.created_at.isoformat()
+    d["updated_at"] = p.updated_at.isoformat()
+    docs = await db.reservations.find({"project_id": p.id}).sort("article_number", 1).to_list(500)
+    active = [x for x in docs if x["status"] == "actief"]
+    d["line_count"] = len(active)
+    d["total_reserved"] = sum(x["quantity"] for x in active)
+    if with_lines:
+        art_ids = list({ObjectId(x["article_id"]) for x in docs})
+        arts = {str(a["_id"]): a for a in await db.articles.find({"_id": {"$in": art_ids}}).to_list(None)}
+        lines = []
+        for x in docs:
+            o = reservation_out(Reservation.from_mongo(x))
+            a = arts.get(x["article_id"])
+            if a:
+                o["article_unit"] = a.get("unit", "stuks")
+                o["article_physical_stock"] = a["physical_stock"]
+                o["article_available_stock"] = a["physical_stock"] - a.get("reserved_stock", 0)
+            lines.append(o)
+        d["lines"] = lines
+    return d
+
+
+async def load_lines(lines: List[ProjectLineIn]) -> List[tuple]:
+    ids = [l.article_id for l in lines]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(422, "Elk artikel mag maar één keer voorkomen; tel de aantallen op")
+    out = []
+    for l in lines:
+        doc = await db.articles.find_one({"_id": oid(l.article_id)})
+        if not doc:
+            raise HTTPException(404, "Artikel niet gevonden")
+        a = Article.from_mongo(doc)
+        if not a.active:
+            raise HTTPException(400, f"Artikel {a.article_number} is inactief")
+        out.append((a, l.quantity))
+    return out
+
+
+@api.get("/projects")
+async def list_projects(status: Literal["actief", "vervallen", "alle"] = "actief", q: str = "", _: User = Depends(current_user)):
+    filt: dict[str, Any] = {} if status == "alle" else {"status": status}
+    if q.strip():
+        filt["name"] = {"$regex": re.escape(q.strip()), "$options": "i"}
+    docs = await db.projects.find(filt).sort("created_at", -1).to_list(500)
+    return [await project_out(Project.from_mongo(d)) for d in docs]
+
+
+@api.get("/projects/{project_id}")
+async def get_project(project_id: str, _: User = Depends(current_user)):
+    doc = await db.projects.find_one({"_id": oid(project_id)})
+    if not doc:
+        raise HTTPException(404, "Project niet gevonden")
+    return await project_out(Project.from_mongo(doc), with_lines=True)
+
+
+@api.post("/projects", status_code=201)
+async def create_project(data: ProjectCreateIn, user: User = Depends(require_roles("admin"))):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(422, "Projectnaam of -nummer is verplicht")
+    existing = await db.projects.find_one({"name_lower": name.lower()})
+    if existing:
+        if existing.get("client_request_id") == data.client_request_id:
+            return await project_out(Project.from_mongo(existing), with_lines=True)
+        raise HTTPException(409, f"Project '{existing['name']}' bestaat al. Voeg artikelen toe aan het bestaande project.")
+    items = await load_lines(data.lines)
+    # Vooraf controleren: alle regels moeten binnen de beschikbare voorraad passen
+    problems = [f"{a.article_number}: {a.physical_stock - a.reserved_stock} beschikbaar, {q} gevraagd"
+                for a, q in items if q > a.physical_stock - a.reserved_stock]
+    if problems:
+        raise HTTPException(409, "Onvoldoende beschikbare voorraad — " + "; ".join(problems))
+    p = Project(name=name, name_lower=name.lower(), note=data.note.strip(), created_by=user.name)
+    doc = p.to_mongo()
+    doc["client_request_id"] = data.client_request_id
+    try:
+        res = await db.projects.insert_one(doc)
+    except DuplicateKeyError:
+        raise HTTPException(409, f"Project '{name}' bestaat al")
+    p.id = str(res.inserted_id)
+    done: List[Reservation] = []
+    try:
+        for i, (a, q) in enumerate(items):
+            done.append(await reserve_line(p, a, q, "", user, f"{data.client_request_id}-{i}"))
+    except HTTPException as e:
+        # Gelijktijdige wijziging: al geplaatste regels van deze aanvraag ongedaan maken (nooit zichtbaar geweest)
+        for r in done:
+            await db.articles.update_one({"_id": ObjectId(r.article_id)}, {"$inc": {"reserved_stock": -r.quantity}})
+            await db.reservations.delete_one({"_id": ObjectId(r.id)})
+            await db.reservation_events.delete_many({"reservation_id": r.id})
+        await db.projects.delete_one({"_id": res.inserted_id})
+        raise HTTPException(409, f"Project niet aangemaakt: {e.detail}")
+    return await project_out(p, with_lines=True)
+
+
+@api.patch("/projects/{project_id}")
+async def update_project(project_id: str, data: ProjectUpdateIn, user: User = Depends(require_roles("admin"))):
+    doc = await db.projects.find_one({"_id": oid(project_id)})
+    if not doc:
+        raise HTTPException(404, "Project niet gevonden")
+    upd: dict[str, Any] = {"updated_at": now()}
+    if data.note is not None:
+        upd["note"] = data.note.strip()
+    if data.name is not None and data.name.strip() != doc["name"]:
+        upd["name"] = data.name.strip()
+        upd["name_lower"] = upd["name"].lower()
+    try:
+        new = await db.projects.find_one_and_update({"_id": doc["_id"]}, {"$set": upd}, return_document=ReturnDocument.AFTER)
+    except DuplicateKeyError:
+        raise HTTPException(409, f"Er bestaat al een project met de naam '{data.name}'")
+    if "name" in upd:
+        await db.reservations.update_many({"project_id": project_id}, {"$set": {"project": upd["name"]}})
+    return await project_out(Project.from_mongo(new), with_lines=True)
+
+
+@api.post("/projects/{project_id}/lines", status_code=201)
+async def add_project_line(project_id: str, data: ProjectAddLineIn, user: User = Depends(require_roles("admin"))):
+    existing = await db.reservations.find_one({"client_request_id": data.client_request_id})
+    if existing:
+        return reservation_out(Reservation.from_mongo(existing))
+    doc = await db.projects.find_one({"_id": oid(project_id)})
+    if not doc:
+        raise HTTPException(404, "Project niet gevonden")
+    p = Project.from_mongo(doc)
+    if p.status != "actief":
+        raise HTTPException(409, "Project is vervallen")
+    (a, q), = await load_lines([data])
+    return reservation_out(await reserve_line(p, a, q, data.note, user, data.client_request_id))
+
+
+@api.post("/projects/{project_id}/release")
+async def release_project(project_id: str, data: ReservationCloseIn, user: User = Depends(require_roles("admin"))):
+    doc = await db.projects.find_one({"_id": oid(project_id)})
+    if not doc:
+        raise HTTPException(404, "Project niet gevonden")
+    for r in await db.reservations.find({"project_id": project_id, "status": "actief"}).to_list(None):
+        await close_reservation(str(r["_id"]), "opgeheven", data.note or "Project vervallen", user)
+    new = await db.projects.find_one_and_update({"_id": doc["_id"]}, {"$set": {"status": "vervallen", "updated_at": now()}},
+                                                return_document=ReturnDocument.AFTER)
+    return await project_out(Project.from_mongo(new), with_lines=True)
+
+
+# ---------------------------------------------------------------- Leveranciersbestellingen
+OrderStatus = Literal["besteld", "gedeeltelijk_ontvangen", "volledig_ontvangen"]
+DATE_RX = r"^\d{4}-\d{2}-\d{2}$"
+
+
+class OrderLine(BaseModel):
+    line_id: str
+    article_id: str
+    article_number: str
+    article_description: str
+    unit: str = "stuks"
+    ordered: int
+    received: int = 0
+
+
+class SupplierOrder(BaseDocument):
+    order_number: str
+    order_number_lower: str
+    supplier: str = "China"
+    order_date: str
+    expected_date: Optional[str] = None
+    note: str = ""
+    status: OrderStatus = "besteld"
+    lines: List[OrderLine] = []
+    version: int = 0
+    created_by: str
+    created_at: datetime = Field(default_factory=now)
+    updated_at: datetime = Field(default_factory=now)
+
+
+def _check_date(v: Optional[str], label: str) -> Optional[str]:
+    if v is None or v == "":
+        return None
+    v = v.strip()
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(422, f"{label} is ongeldig; gebruik JJJJ-MM-DD")
+    return v
+
+
+class OrderLineIn(BaseModel):
+    line_id: Optional[str] = None
+    article_id: str
+    quantity: int = Field(ge=1, le=1000000)
+
+
+class OrderCreateIn(BaseModel):
+    order_number: str = Field(min_length=1, max_length=60)
+    supplier: str = Field(default="China", max_length=100)
+    order_date: str
+    expected_date: Optional[str] = None
+    note: str = Field(default="", max_length=500)
+    lines: List[OrderLineIn] = Field(min_length=1, max_length=300)
+
+
+class OrderUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int
+    order_number: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    supplier: Optional[str] = Field(default=None, max_length=100)
+    order_date: Optional[str] = None
+    expected_date: Optional[str] = None
+    note: Optional[str] = Field(default=None, max_length=500)
+    lines: Optional[List[OrderLineIn]] = Field(default=None, min_length=1, max_length=300)
+
+
+class ReceiveLineIn(BaseModel):
+    line_id: str
+    quantity: int = Field(ge=0, le=1000000)
+
+
+class ReceiveIn(BaseModel):
+    client_request_id: str = Field(min_length=8, max_length=80)
+    lines: List[ReceiveLineIn] = Field(min_length=1)
+    note: str = Field(default="", max_length=500)
+
+
+def order_status(lines: List[OrderLine]) -> str:
+    if lines and all(l.received >= l.ordered for l in lines):
+        return "volledig_ontvangen"
+    if any(l.received > 0 for l in lines):
+        return "gedeeltelijk_ontvangen"
+    return "besteld"
+
+
+def order_out(o: SupplierOrder) -> dict:
+    d = o.model_dump(exclude={"order_number_lower"})
+    d["created_at"] = o.created_at.isoformat()
+    d["updated_at"] = o.updated_at.isoformat()
+    for l in d["lines"]:
+        l["open"] = max(l["ordered"] - l["received"], 0)
+    d["total_ordered"] = sum(l.ordered for l in o.lines)
+    d["total_received"] = sum(l.received for l in o.lines)
+    return d
+
+
+async def build_order_lines(items: List[OrderLineIn], current: List[OrderLine]) -> List[OrderLine]:
+    ids = [i.article_id for i in items]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(422, "Elk artikel mag maar één keer in de bestelling voorkomen")
+    cur = {l.line_id: l for l in current}
+    out = []
+    for i in items:
+        prev = cur.get(i.line_id) if i.line_id else None
+        if prev:
+            if prev.article_id != i.article_id and prev.received > 0:
+                raise HTTPException(409, f"Artikel van regel {prev.article_number} kan niet worden gewijzigd; er is al ontvangen")
+            if i.quantity < prev.received:
+                raise HTTPException(409, f"{prev.article_number}: besteld aantal kan niet lager zijn dan al ontvangen ({prev.received})")
+        doc = await db.articles.find_one({"_id": oid(i.article_id)})
+        if not doc:
+            raise HTTPException(404, "Artikel niet gevonden")
+        a = Article.from_mongo(doc)
+        out.append(OrderLine(line_id=prev.line_id if prev else uuid.uuid4().hex[:12], article_id=a.id, article_number=a.article_number,
+                             article_description=a.title, unit=a.unit, ordered=i.quantity, received=prev.received if prev else 0))
+    kept = {l.line_id for l in out}
+    for l in current:
+        if l.line_id not in kept and l.received > 0:
+            raise HTTPException(409, f"Regel {l.article_number} kan niet worden verwijderd; er is al {l.received} ontvangen")
+    return out
+
+
+@api.get("/supplier-orders")
+async def list_orders(status: Literal["open", "volledig_ontvangen", "alle"] = "open", q: str = "", _: User = Depends(current_user)):
+    filt: dict[str, Any] = {}
+    if status == "open":
+        filt["status"] = {"$in": ["besteld", "gedeeltelijk_ontvangen"]}
+    elif status == "volledig_ontvangen":
+        filt["status"] = "volledig_ontvangen"
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        filt["$or"] = [{"order_number": rx}, {"lines.article_number": rx}]
+    docs = await db.supplier_orders.find(filt).sort("order_date", -1).to_list(500)
+    return [order_out(SupplierOrder.from_mongo(d)) for d in docs]
+
+
+@api.get("/supplier-orders/{order_id}")
+async def get_order(order_id: str, _: User = Depends(current_user)):
+    doc = await db.supplier_orders.find_one({"_id": oid(order_id)})
+    if not doc:
+        raise HTTPException(404, "Bestelling niet gevonden")
+    out = order_out(SupplierOrder.from_mongo(doc))
+    muts = await db.mutations.find({"supplier_order_id": order_id, "status": "geboekt"}).sort("created_at", -1).to_list(500)
+    out["receipts"] = [mutation_out(Mutation.from_mongo(m)) for m in muts]
+    return out
+
+
+@api.post("/supplier-orders", status_code=201)
+async def create_order(data: OrderCreateIn, user: User = Depends(require_roles("admin"))):
+    num = data.order_number.strip()
+    if not num:
+        raise HTTPException(422, "Bestelnummer is verplicht")
+    od = _check_date(data.order_date, "Besteldatum")
+    if not od:
+        raise HTTPException(422, "Besteldatum is verplicht")
+    lines = await build_order_lines(data.lines, [])
+    o = SupplierOrder(order_number=num, order_number_lower=num.lower(), supplier=data.supplier.strip() or "China", order_date=od,
+                      expected_date=_check_date(data.expected_date, "Verwachte leverdatum"), note=data.note.strip(),
+                      lines=lines, created_by=user.name)
+    try:
+        res = await db.supplier_orders.insert_one(o.to_mongo())
+    except DuplicateKeyError:
+        raise HTTPException(409, f"Bestelnummer {num} bestaat al")
+    o.id = str(res.inserted_id)
+    return order_out(o)
+
+
+@api.patch("/supplier-orders/{order_id}")
+async def update_order(order_id: str, data: OrderUpdateIn, user: User = Depends(require_roles("admin"))):
+    doc = await db.supplier_orders.find_one({"_id": oid(order_id)})
+    if not doc:
+        raise HTTPException(404, "Bestelling niet gevonden")
+    o = SupplierOrder.from_mongo(doc)
+    if data.version != o.version:
+        raise HTTPException(409, "Bestelling is intussen gewijzigd (bijv. ontvangst geboekt). Vernieuw en probeer opnieuw.")
+    upd: dict[str, Any] = {"updated_at": now()}
+    if data.order_number is not None:
+        upd["order_number"] = data.order_number.strip()
+        upd["order_number_lower"] = upd["order_number"].lower()
+    if data.supplier is not None:
+        upd["supplier"] = data.supplier.strip() or "China"
+    if data.order_date is not None:
+        upd["order_date"] = _check_date(data.order_date, "Besteldatum") or o.order_date
+    if data.expected_date is not None:
+        upd["expected_date"] = _check_date(data.expected_date, "Verwachte leverdatum")
+    if data.note is not None:
+        upd["note"] = data.note.strip()
+    if data.lines is not None:
+        lines = await build_order_lines(data.lines, o.lines)
+        upd["lines"] = [l.model_dump() for l in lines]
+        upd["status"] = order_status(lines)
+    try:
+        new = await db.supplier_orders.find_one_and_update({"_id": doc["_id"], "version": o.version},
+                                                           {"$set": upd, "$inc": {"version": 1}}, return_document=ReturnDocument.AFTER)
+    except DuplicateKeyError:
+        raise HTTPException(409, f"Bestelnummer {data.order_number} bestaat al")
+    if not new:
+        raise HTTPException(409, "Bestelling is intussen gewijzigd. Vernieuw en probeer opnieuw.")
+    return order_out(SupplierOrder.from_mongo(new))
+
+
+@api.post("/supplier-orders/{order_id}/receive")
+async def receive_order(order_id: str, data: ReceiveIn, user: User = Depends(require_roles("admin"))):
+    """Binnenboeken: per regel atomisch 'ontvangen' verhogen (nooit boven besteld) en als ontvangst-mutatie boeken.
+    Zelfde client_request_id nogmaals = geen dubbele boeking."""
+    try:
+        await db.supplier_receipts.insert_one({"client_request_id": data.client_request_id, "order_id": order_id,
+                                               "user_id": user.id, "created_at": now()})
+    except DuplicateKeyError:
+        return await get_order(order_id, user)  # al verwerkt
+    doc = await db.supplier_orders.find_one({"_id": oid(order_id)})
+    if not doc:
+        raise HTTPException(404, "Bestelling niet gevonden")
+    o = SupplierOrder.from_mongo(doc)
+    by_id = {l.line_id: l for l in o.lines}
+    items = [i for i in data.lines if i.quantity > 0]
+    if not items:
+        await db.supplier_receipts.delete_one({"client_request_id": data.client_request_id})
+        raise HTTPException(422, "Voer bij minimaal één regel een ontvangen aantal in")
+    for i in items:
+        l = by_id.get(i.line_id)
+        if not l:
+            await db.supplier_receipts.delete_one({"client_request_id": data.client_request_id})
+            raise HTTPException(404, "Bestelregel niet gevonden")
+        if i.quantity > l.ordered - l.received:
+            await db.supplier_receipts.delete_one({"client_request_id": data.client_request_id})
+            raise HTTPException(409, f"{l.article_number}: nog {l.ordered - l.received} te ontvangen, {i.quantity} ingevoerd")
+    errors = []
+    for i in items:
+        l = by_id[i.line_id]
+        upd = await db.supplier_orders.update_one(
+            {"_id": doc["_id"], "lines": {"$elemMatch": {"line_id": l.line_id, "ordered": l.ordered, "received": {"$lte": l.ordered - i.quantity}}}},
+            {"$inc": {"lines.$.received": i.quantity, "version": 1}, "$set": {"updated_at": now()}})
+        if not upd.modified_count:
+            errors.append(f"{l.article_number}: gelijktijdig gewijzigd of al ontvangen")
+            continue
+        try:
+            m = await book_mutation(MutationIn(client_request_id=f"rcv-{data.client_request_id}-{l.line_id}", article_id=l.article_id,
+                                               type="ontvangst", quantity=i.quantity,
+                                               note=f"Ontvangst bestelling {o.order_number}" + (f" — {data.note.strip()}" if data.note.strip() else "")), user)
+            await db.mutations.update_one({"_id": ObjectId(m["id"])}, {"$set": {"supplier_order_id": order_id, "supplier_order_number": o.order_number}})
+        except HTTPException as e:
+            await db.supplier_orders.update_one({"_id": doc["_id"], "lines.line_id": l.line_id},
+                                                {"$inc": {"lines.$.received": -i.quantity, "version": 1}})
+            errors.append(f"{l.article_number}: {e.detail}")
+    fresh = SupplierOrder.from_mongo(await db.supplier_orders.find_one({"_id": doc["_id"]}))
+    await db.supplier_orders.update_one({"_id": doc["_id"]}, {"$set": {"status": order_status(fresh.lines)}})
+    out = await get_order(order_id, user)
+    out["errors"] = errors
+    return out
 
 
 @api.patch("/reservations/{reservation_id}")
@@ -1070,7 +1531,13 @@ async def update_reservation(reservation_id: str, data: ReservationUpdateIn, use
     if data.project is not None and data.project.strip() != r.project:
         if not data.project.strip():
             raise HTTPException(422, "Project mag niet leeg zijn")
-        upd["project"] = data.project.strip()
+        target = await find_or_create_project(data.project, user.name)
+        if target.id != r.project_id:
+            dup = await db.reservations.find_one({"project_id": target.id, "article_id": r.article_id, "status": "actief"})
+            if dup:
+                raise HTTPException(409, f"Dit artikel is al gereserveerd voor project {target.name}. Wijzig daar het aantal.")
+        upd["project"] = target.name
+        upd["project_id"] = target.id
         changes.append(f"project '{r.project}' → '{upd['project']}'")
     if data.note is not None and data.note.strip() != r.note:
         upd["note"] = data.note.strip()
@@ -1159,6 +1626,23 @@ async def startup():
     await db.reservations.create_index("client_request_id", unique=True, partialFilterExpression={"client_request_id": {"$type": "string"}})
     await db.reservation_events.create_index([("reservation_id", 1), ("created_at", -1)])
     await db.articles.update_many({"reserved_stock": {"$exists": False}}, {"$set": {"reserved_stock": 0}})
+    await db.projects.create_index("name_lower", unique=True)
+    await db.supplier_orders.create_index("order_number_lower", unique=True)
+    await db.supplier_orders.create_index([("status", 1), ("order_date", -1)])
+    await db.supplier_receipts.create_index("client_request_id", unique=True)
+    await db.mutations.create_index("supplier_order_id", sparse=True)
+    # Bestaande reserveringen zonder project-koppeling koppelen aan een project (op naam)
+    async for r in db.reservations.find({"project_id": {"$exists": False}}):
+        doc = await db.projects.find_one({"name_lower": r["project"].strip().lower()})
+        if not doc:
+            await db.projects.insert_one(Project(name=r["project"].strip(), name_lower=r["project"].strip().lower(), created_by=r.get("created_by", "")).to_mongo())
+            doc = await db.projects.find_one({"name_lower": r["project"].strip().lower()})
+        await db.reservations.update_one({"_id": r["_id"]}, {"$set": {"project_id": str(doc["_id"])}})
+    try:
+        await db.reservations.create_index([("project_id", 1), ("article_id", 1)], unique=True, name="uniq_active_project_article",
+                                           partialFilterExpression={"status": "actief"})
+    except Exception as e:
+        logger.warning("Index uniq_active_project_article niet aangemaakt: %s", e)
 
     seed_users = [
         (os.environ["ADMIN_EMAIL"], os.environ["ADMIN_PASSWORD"], "Beheerder", "admin"),

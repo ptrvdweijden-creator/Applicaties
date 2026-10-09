@@ -38,6 +38,10 @@ export default function TabsLayout() {
           <NativeTabs.Trigger.Icon sf="arrow.left.arrow.right" />
           <NativeTabs.Trigger.Label>Mutaties</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="planning">
+          <NativeTabs.Trigger.Icon sf="calendar" />
+          <NativeTabs.Trigger.Label>Planning</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
       </NativeTabs>
     );
   }
@@ -87,6 +91,14 @@ export default function TabsLayout() {
           title: "Mutaties",
           tabBarButtonTestID: "tab-mutaties",
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "swap-horizontal" : "swap-horizontal-outline"} size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="planning"
+        options={{
+          title: "Planning",
+          tabBarButtonTestID: "tab-planning",
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "calendar" : "calendar-outline"} size={22} color={color} />,
         }}
       />
     </Tabs>

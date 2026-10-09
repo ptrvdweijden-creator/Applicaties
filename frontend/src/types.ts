@@ -80,6 +80,56 @@ export const RESERVATION_STATUS_LABELS: Record<ReservationStatus, string> = {
   opgeheven: "Opgeheven",
 };
 
+export type ProjectLine = Reservation & { article_unit?: string; article_physical_stock?: number; article_available_stock?: number };
+
+export type Project = {
+  id: string;
+  name: string;
+  note: string;
+  status: "actief" | "vervallen";
+  created_by: string;
+  created_at: string;
+  line_count: number;
+  total_reserved: number;
+  lines?: ProjectLine[];
+};
+
+export type OrderStatus = "besteld" | "gedeeltelijk_ontvangen" | "volledig_ontvangen";
+
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  besteld: "Besteld",
+  gedeeltelijk_ontvangen: "Gedeeltelijk ontvangen",
+  volledig_ontvangen: "Volledig ontvangen",
+};
+
+export type OrderLine = {
+  line_id: string;
+  article_id: string;
+  article_number: string;
+  article_description: string;
+  unit: string;
+  ordered: number;
+  received: number;
+  open: number;
+};
+
+export type SupplierOrder = {
+  id: string;
+  order_number: string;
+  supplier: string;
+  order_date: string;
+  expected_date: string | null;
+  note: string;
+  status: OrderStatus;
+  lines: OrderLine[];
+  version: number;
+  created_by: string;
+  total_ordered: number;
+  total_received: number;
+  receipts?: Mutation[];
+  errors?: string[];
+};
+
 export type Dashboard = {
   active_articles: number;
   below_min_count: number;

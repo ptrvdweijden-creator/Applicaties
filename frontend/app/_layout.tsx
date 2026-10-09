@@ -45,6 +45,10 @@ function AuthGate() {
       <Stack.Screen name="profiel" options={{ headerShown: true, title: "Profiel" }} />
       <Stack.Screen name="gebruikers" options={{ headerShown: true, title: "Gebruikersbeheer" }} />
       <Stack.Screen name="import" options={{ headerShown: true, title: "Artikelen importeren" }} />
+      <Stack.Screen name="project/[id]" options={{ headerShown: true, title: "Project" }} />
+      <Stack.Screen name="project-form" options={{ headerShown: true, title: "Project" }} />
+      <Stack.Screen name="bestelling/[id]" options={{ headerShown: true, title: "Bestelling" }} />
+      <Stack.Screen name="bestelling-form" options={{ headerShown: true, title: "Bestelling" }} />
     </Stack>
   );
 }

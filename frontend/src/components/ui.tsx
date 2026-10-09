@@ -3,7 +3,7 @@ import React, { ComponentProps, forwardRef } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, TextInputProps, View, ViewStyle } from "react-native";
 
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
-import { Article, articleTitle, Mutation, MUTATION_ICONS, MUTATION_LABELS } from "@/src/types";
+import { Article, articleTitle, Mutation, MUTATION_ICONS, MUTATION_LABELS, ORDER_STATUS_LABELS, OrderStatus } from "@/src/types";
 
 export type IconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -107,6 +107,10 @@ export function Badge({ label, tone = "neutral", testID }: { label: string; tone
       <Text style={[styles.badgeText, { color: map[1] }]}>{label}</Text>
     </View>
   );
+}
+
+export function OrderStatusBadge({ status }: { status: OrderStatus }) {
+  return <Badge testID="order-status" label={ORDER_STATUS_LABELS[status]} tone={status === "volledig_ontvangen" ? "success" : status === "gedeeltelijk_ontvangen" ? "warning" : "info"} />;
 }
 
 export function StateView({ icon, title, text, action, testID }: { icon: IconName; title: string; text?: string; action?: React.ReactNode; testID?: string }) {
