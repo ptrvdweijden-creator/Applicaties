@@ -2,7 +2,7 @@ export type Role = "admin" | "magazijn" | "monteur";
 export type MutationType = "ontvangst" | "afboeken" | "retour" | "correctie";
 export type MutationKind = MutationType | "beginvoorraad";
 
-export type User = { id: string; email: string; name: string; role: Role; active: boolean };
+export type User = { id: string; email: string; name: string; role: Role; active: boolean; must_change_password?: boolean };
 
 export type BarcodeSvg = { filename: string; barcode_value: string; size: number; version: string; uploaded_at: string };
 

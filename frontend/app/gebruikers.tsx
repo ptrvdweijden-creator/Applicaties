@@ -134,7 +134,7 @@ function NewUserSheet({ visible, onClose }: { visible: boolean; onClose: () => v
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing.lg }}>
             <Input testID="new-user-name-input" label="Naam" value={name} onChangeText={setName} placeholder="Voor- en achternaam" />
             <Input testID="new-user-email-input" label="E-mailadres" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="naam@bedrijf.nl" />
-            <Input testID="new-user-password-input" label="Tijdelijk wachtwoord" value={password} onChangeText={setPassword} secureTextEntry hint="Minimaal 8 tekens" />
+            <Input testID="new-user-password-input" label="Tijdelijk wachtwoord" value={password} onChangeText={setPassword} secureTextEntry hint="Minimaal 8 tekens. De gebruiker moet dit bij de eerste login zelf wijzigen." />
             <View style={{ gap: 6 }}>
               <Text style={styles.label}>Rol</Text>
               <View style={{ flexDirection: "row", gap: spacing.sm }}>

@@ -60,7 +60,8 @@ export default function Profile() {
         </>
       )}
 
-      <View style={{ padding: spacing.lg }}>
+      <View style={{ padding: spacing.lg, gap: spacing.sm }}>
+        <Button testID="profile-change-password-button" title="Wachtwoord wijzigen" variant="secondary" icon="key-outline" onPress={() => router.push("/wachtwoord")} />
         <Button testID="profile-logout-button" title="Uitloggen" variant="ghost" icon="log-out-outline" onPress={logout} />
       </View>
     </ScrollView>

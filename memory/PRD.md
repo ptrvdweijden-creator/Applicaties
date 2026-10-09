@@ -36,6 +36,12 @@ Nederlandstalige mobiele voorraadbeheer-app voor ±300 artikelen douchebeslag: a
 - supplier_orders met regels (besteld/ontvangen/open), statussen besteld/gedeeltelijk/volledig ontvangen, optimistische versie; binnenboeken idempotent (supplier_receipts) en als ontvangst-mutatie met supplier_order_number
 - Alleen admin beheert; overige rollen alleen lezen (backend 403)
 
+## Iteratie 5 (okt 2026) – Security-audit fixes
+- Geen hard-coded seed-accounts; bootstrap-admin alleen bij lege users-collectie (must_change_password)
+- Accounts met standaardwachtwoord moeten bij login wijzigen; /auth/change-password + token_version (oude tokens ongeldig); scherm /wachtwoord + knop in Profiel
+- magazijn@/monteur@douchebeslag.nl gedeactiveerd; nieuwe/gereset accounts krijgen tijdelijk wachtwoord
+- Login-throttling 5 mislukt/15 min per account (30 per IP); CORS via CORS_ORIGINS
+
 ## Backlog
 - P1: CSV/Excel-import artikelen; projecten + reserveringen; wachtwoord wijzigen
 - P2: inkomende bestellingen, verbruiksanalyse, besteladvies bij lange levertijden, export mutaties

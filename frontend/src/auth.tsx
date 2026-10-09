@@ -12,6 +12,7 @@ type AuthCtx = {
   logout: () => Promise<void>;
   isAdmin: boolean;
   canMutate: (t: MutationType) => boolean;
+  changePassword: (current: string, next: string) => Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx>(null as never);
@@ -56,7 +57,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAdmin = user?.role === "admin";
   const canMutate = (t: MutationType) => !!user && MUTATION_ROLES[t].includes(user.role);
 
-  return <Ctx.Provider value={{ user, loading, login, logout, isAdmin, canMutate }}>{children}</Ctx.Provider>;
+  const changePassword = async (current_password: string, new_password: string) => {
+    const res = await api<{ access_token: string; user: User }>("/auth/change-password", {
+      method: "POST",
+      body: { current_password, new_password },
+    });
+    await storage.secureSet(TOKEN_KEY, res.access_token); // oude token is nu ongeldig
+    queryClient.clear();
+    setUser(res.user);
+  };
+
+  return <Ctx.Provider value={{ user, loading, login, logout, isAdmin, canMutate, changePassword }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

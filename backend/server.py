@@ -21,7 +21,7 @@ import jwt
 import requests
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from openpyxl import Workbook, load_workbook
@@ -139,10 +139,13 @@ class User(BaseDocument):
     role: Role
     active: bool = True
     password_hash: str = ""
+    must_change_password: bool = False
+    token_version: int = 0  # verhogen = alle bestaande tokens ongeldig
     created_at: datetime = Field(default_factory=now)
 
     def public(self) -> dict:
-        return {"id": self.id, "email": self.email, "name": self.name, "role": self.role, "active": self.active}
+        return {"id": self.id, "email": self.email, "name": self.name, "role": self.role, "active": self.active,
+                "must_change_password": self.must_change_password}
 
 
 class Article(BaseDocument):
@@ -353,10 +356,12 @@ class ReservationCloseIn(BaseModel):
 # ---------------------------------------------------------------- Auth
 def make_token(user: User) -> str:
     t = now()
-    return jwt.encode({"sub": user.id, "role": user.role, "iat": t, "exp": t + timedelta(hours=TOKEN_HOURS)}, JWT_SECRET, algorithm="HS256")
+    return jwt.encode({"sub": user.id, "tv": user.token_version, "iat": t, "exp": t + timedelta(hours=TOKEN_HOURS)},
+                      JWT_SECRET, algorithm="HS256")
 
 
-async def current_user(cred: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> User:
+async def authenticated_user(cred: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> User:
+    """Geldig token + actieve gebruiker + actuele token_version. Ook toegestaan bij verplichte wachtwoordwijziging."""
     err = HTTPException(401, "Sessie verlopen of ongeldig. Log opnieuw in.")
     if not cred:
         raise err
@@ -365,9 +370,15 @@ async def current_user(cred: Optional[HTTPAuthorizationCredentials] = Depends(be
         doc = await db.users.find_one({"_id": ObjectId(payload["sub"])})
     except (InvalidTokenError, KeyError, Exception):
         raise err
-    if not doc or not doc.get("active", True):
+    if not doc or not doc.get("active", True) or payload.get("tv", 0) != doc.get("token_version", 0):
         raise err
     return User.from_mongo(doc)
+
+
+async def current_user(user: User = Depends(authenticated_user)) -> User:
+    if user.must_change_password:
+        raise HTTPException(403, "Wijzig eerst uw wachtwoord voordat u verder gaat")
+    return user
 
 
 def require_roles(*roles: str):
@@ -378,18 +389,71 @@ def require_roles(*roles: str):
     return dep
 
 
+LOGIN_WINDOW_SECONDS = 15 * 60
+MAX_FAILED_PER_ACCOUNT = 5
+MAX_FAILED_PER_IP = 30
+DUMMY_HASH = hasher.hash("dummy-password-for-timing")
+DEFAULT_PASSWORDS = {"Admin123!", "Magazijn123!", "Monteur123!"}  # oude standaardwachtwoorden: nooit meer toestaan
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "onbekend")
+
+
+def validate_new_password(pw: str) -> None:
+    if len(pw) < 10:
+        raise HTTPException(422, "Het nieuwe wachtwoord moet minimaal 10 tekens bevatten")
+    if not re.search(r"[A-Za-z]", pw) or not re.search(r"\d", pw):
+        raise HTTPException(422, "Het nieuwe wachtwoord moet minimaal één letter en één cijfer bevatten")
+    if pw in DEFAULT_PASSWORDS or pw == os.environ["ADMIN_PASSWORD"]:
+        raise HTTPException(422, "Dit standaardwachtwoord is niet toegestaan; kies een eigen wachtwoord")
+
+
 @api.post("/auth/login")
-async def login(data: LoginIn):
-    doc = await db.users.find_one({"email": data.email.strip().lower()})
+async def login(data: LoginIn, request: Request):
+    email = data.email.strip().lower()
+    keys = {f"acct:{email}": MAX_FAILED_PER_ACCOUNT, f"ip:{client_ip(request)}": MAX_FAILED_PER_IP}
+    since = now() - timedelta(seconds=LOGIN_WINDOW_SECONDS)
+    for key, limit in keys.items():
+        if await db.login_failures.count_documents({"key": key, "at": {"$gte": since}}) >= limit:
+            raise HTTPException(429, "Te veel mislukte inlogpogingen. Probeer het over 15 minuten opnieuw.")
+    doc = await db.users.find_one({"email": email})
     user = User.from_mongo(doc) if doc else None
-    if not user or not hasher.verify(data.password, user.password_hash) or not user.active:
+    valid = hasher.verify(data.password, user.password_hash if user else DUMMY_HASH)  # gelijke rekentijd
+    if not user or not valid or not user.active:
+        await db.login_failures.insert_many([{"key": k, "at": now()} for k in keys])
         raise HTTPException(401, "E-mailadres of wachtwoord is onjuist")
+    await db.login_failures.delete_many({"key": f"acct:{email}"})
     return {"access_token": make_token(user), "user": user.public()}
 
 
 @api.get("/auth/me")
-async def me(user: User = Depends(current_user)):
+async def me(user: User = Depends(authenticated_user)):
     return user.public()
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+@api.post("/auth/change-password")
+async def change_password(data: ChangePasswordIn, user: User = Depends(authenticated_user)):
+    if not hasher.verify(data.current_password, user.password_hash):
+        raise HTTPException(400, "Huidig wachtwoord is onjuist")
+    if data.new_password == data.current_password:
+        raise HTTPException(422, "Het nieuwe wachtwoord moet anders zijn dan het huidige")
+    validate_new_password(data.new_password)
+    doc = await db.users.find_one_and_update(
+        {"_id": ObjectId(user.id), "token_version": user.token_version},
+        {"$set": {"password_hash": hasher.hash(data.new_password), "must_change_password": False, "password_changed_at": now()},
+         "$inc": {"token_version": 1}},
+        return_document=ReturnDocument.AFTER)
+    if not doc:
+        raise HTTPException(409, "Sessie is gewijzigd; log opnieuw in")
+    new = User.from_mongo(doc)
+    return {"access_token": make_token(new), "user": new.public()}
 
 
 # ---------------------------------------------------------------- Users (admin)
@@ -401,7 +465,11 @@ async def list_users(_: User = Depends(require_roles("admin"))):
 
 @api.post("/users", status_code=201)
 async def create_user(data: UserCreateIn, _: User = Depends(require_roles("admin"))):
-    user = User(email=data.email, name=data.name.strip(), role=data.role, password_hash=hasher.hash(data.password))
+    if data.password in DEFAULT_PASSWORDS:
+        raise HTTPException(422, "Dit standaardwachtwoord is niet toegestaan")
+    # Tijdelijk wachtwoord: gebruiker moet het bij de eerste login zelf wijzigen
+    user = User(email=data.email, name=data.name.strip(), role=data.role, password_hash=hasher.hash(data.password),
+                must_change_password=True)
     try:
         res = await db.users.insert_one(user.to_mongo())
     except DuplicateKeyError:
@@ -419,11 +487,21 @@ async def update_user(user_id: str, data: UserUpdateIn, admin: User = Depends(re
         upd["role"] = data.role
     if data.active is not None:
         upd["active"] = data.active
+    inc = {}
     if data.password:
+        if data.password in DEFAULT_PASSWORDS:
+            raise HTTPException(422, "Dit standaardwachtwoord is niet toegestaan")
         upd["password_hash"] = hasher.hash(data.password)
+        upd["must_change_password"] = True  # reset door admin = tijdelijk wachtwoord
+        inc["token_version"] = 1
+    if data.active is False or data.role is not None:
+        inc["token_version"] = 1  # bestaande sessies direct ongeldig
     if user_id == admin.id and (upd.get("active") is False or upd.get("role", "admin") != "admin"):
         raise HTTPException(400, "U kunt uw eigen beheerdersaccount niet deactiveren of degraderen")
-    doc = await db.users.find_one_and_update({"_id": oid(user_id)}, {"$set": upd}, return_document=ReturnDocument.AFTER)
+    if user_id == admin.id and data.password:
+        raise HTTPException(400, "Wijzig uw eigen wachtwoord via Profiel → Wachtwoord wijzigen")
+    doc = await db.users.find_one_and_update({"_id": oid(user_id)}, {"$set": upd, **({"$inc": inc} if inc else {})},
+                                             return_document=ReturnDocument.AFTER)
     if not doc:
         raise HTTPException(404, "Gebruiker niet gevonden")
     return User.from_mongo(doc).public()
@@ -1644,14 +1722,22 @@ async def startup():
     except Exception as e:
         logger.warning("Index uniq_active_project_article niet aangemaakt: %s", e)
 
-    seed_users = [
-        (os.environ["ADMIN_EMAIL"], os.environ["ADMIN_PASSWORD"], "Beheerder", "admin"),
-        ("magazijn@douchebeslag.nl", "Magazijn123!", "Magazijn Medewerker", "magazijn"),
-        ("monteur@douchebeslag.nl", "Monteur123!", "Monteur Jan", "monteur"),
-    ]
-    for email, pw, name, role in seed_users:
-        if not await db.users.find_one({"email": email.lower()}):
-            await db.users.insert_one(User(email=email.lower(), name=name, role=role, password_hash=hasher.hash(pw)).to_mongo())
+    await db.login_failures.create_index("at", expireAfterSeconds=LOGIN_WINDOW_SECONDS)
+    await db.login_failures.create_index([("key", 1), ("at", -1)])
+    # Alleen bij een volledig lege gebruikerstabel één beheerder aanmaken (eerste installatie), met verplichte wachtwoordwijziging
+    if await db.users.count_documents({}, limit=1) == 0:
+        try:
+            await db.bootstrap_locks.insert_one({"_id": "initial-admin"})
+            await db.users.insert_one(User(email=os.environ["ADMIN_EMAIL"].lower(), name="Beheerder", role="admin",
+                                           password_hash=hasher.hash(os.environ["ADMIN_PASSWORD"]),
+                                           must_change_password=True).to_mongo())
+        except DuplicateKeyError:
+            pass
+    # Accounts die nog een standaard/bootstrapwachtwoord hebben: verplicht wijzigen bij volgende login
+    defaults = DEFAULT_PASSWORDS | {os.environ["ADMIN_PASSWORD"]}
+    async for u in db.users.find({"must_change_password": {"$ne": True}}):
+        if any(hasher.verify(pw, u.get("password_hash", "")) for pw in defaults):
+            await db.users.update_one({"_id": u["_id"]}, {"$set": {"must_change_password": True}})
 
     try:
         await run_in_threadpool(init_storage)
@@ -1665,4 +1751,7 @@ async def shutdown():
 
 
 app.include_router(api)
-app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# De native app heeft geen CORS nodig; alleen bekende web-origins (preview) worden toegestaan
+app.add_middleware(CORSMiddleware, allow_credentials=False,
+                   allow_origins=[o.strip() for o in os.environ["CORS_ORIGINS"].split(",") if o.strip()],
+                   allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])

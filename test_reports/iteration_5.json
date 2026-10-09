@@ -1,0 +1,39 @@
+{
+  "summary": "Security audit regression: all 11 backend tests PASS (deactivated magazijn/monteur accounts, 5x account lockout -> 429, forced password change flow with 400/422/old-token-401 and new-token-200, admin create/reset forces password change and invalidates old tokens, CORS blocks evil origin / allows preview origin, monteur cannot create articles, admin can read articles/mutations/projects/reservations/supplier-orders). Frontend UI: logging in as a freshly created forced user shows password-forced-banner, tabs are not reachable (/ redirects back to /wachtwoord), filling password-current/new/confirm + password-save-button lands on dashboard, Profiel exposes profile-change-password-button that opens wachtwoord, and profile-logout-button returns to login. No critical issues found. Minor: Expo web prints React Native 'shadow* style props deprecated' and 'props.pointerEvents deprecated' warnings (likely from third-party component libs; informational).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "RN Web styles", "issue": "Console warnings 'shadow* style props are deprecated. Use boxShadow' and 'props.pointerEvents is deprecated. Use style.pointerEvents' appear repeatedly on all screens. Not blocking but should be migrated. Likely originating from shared UI components (Card/Button/Badge)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_security_audit.py",
+    "/app/test_reports/pytest/security_audit.xml"
+  ],
+  "action_items": [
+    "Optional: migrate deprecated RN web style props (shadow*, props.pointerEvents) to boxShadow/style.pointerEvents in shared UI components to clean console warnings."
+  ],
+  "critical_code_review_comments": [
+    "startup bootstrap gate uses db.users.count_documents({},limit=1)==0 which is correct — initial admin only on empty collection.",
+    "login endpoint uses DUMMY_HASH to equalize timing for unknown vs known emails — good constant-time behavior.",
+    "change_password increments token_version via optimistic token_version match, invalidating all previous tokens — correct.",
+    "update_user bumps token_version on password reset, deactivation and role change — correct, invalidates sessions.",
+    "CORS middleware uses allow_credentials=False with explicit allow_origins from CORS_ORIGINS env (no wildcard) — good.",
+    "DEFAULT_PASSWORDS and os.environ['ADMIN_PASSWORD'] rejected in validate_new_password and in create_user/update_user — prevents reuse of seeded defaults."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_security_audit.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Transient user test-ui-forced-<hex>@test.local created via admin API for the UI test and deleted at end. Transient user test_<hex>@test.local created inside TestAdminUserMgmt.test_create_user_forces_change and deleted at end. All login_failures cleared after tests.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run tests with: python -m pytest backend/tests/test_security_audit.py -v -o addopts='' (xdist parallelism causes login_failures races between TestRateLimit and TestAdminUserMgmt because both call clear-failures; run serially). test-forced@test.local is reset back to {password=TempForced2026x, must_change_password=true} by the forced-change test. Two leftover test_<hex>@test.local users from earlier iterations still exist in DB (not created by this run).",
+  "rca_of_issue": "n/a — no bugs found; all requested behaviors verified."
+}

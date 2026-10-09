@@ -24,7 +24,9 @@ function AuthGate() {
   useEffect(() => {
     if (loading) return;
     const onLogin = segments[0] === "login";
+    const onPassword = segments[0] === "wachtwoord";
     if (!user && !onLogin) router.replace("/login");
+    else if (user?.must_change_password && !onPassword) router.replace("/wachtwoord");
     else if (user && onLogin) router.replace("/");
   }, [user, loading, segments, router]);
 
@@ -49,6 +51,7 @@ function AuthGate() {
       <Stack.Screen name="project-form" options={{ headerShown: true, title: "Project" }} />
       <Stack.Screen name="bestelling/[id]" options={{ headerShown: true, title: "Bestelling" }} />
       <Stack.Screen name="bestelling-form" options={{ headerShown: true, title: "Bestelling" }} />
+      <Stack.Screen name="wachtwoord" options={{ headerShown: true, title: "Wachtwoord wijzigen" }} />
     </Stack>
   );
 }
