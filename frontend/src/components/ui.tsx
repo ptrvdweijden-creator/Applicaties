@@ -196,6 +196,12 @@ export function MutationRow({ m, onPress, showArticle = true }: { m: Mutation; o
         <Text style={styles.rowMeta} numberOfLines={1}>
           {formatDateTime(m.created_at)} · {m.user_name}
         </Text>
+        {!!m.project && (
+          <Text style={styles.rowMeta} numberOfLines={1} testID={`mutation-project-${m.id}`}>
+            Project {m.project}
+            {m.reservation_consumed ? ` · ${m.reservation_consumed} uit reservering` : ""}
+          </Text>
+        )}
         {!!m.note && (
           <Text style={styles.note} numberOfLines={2}>
             “{m.note}”

@@ -37,7 +37,47 @@ export type Mutation = {
   stock_after: number;
   user_name: string;
   note: string;
+  project?: string | null;
+  reservation_id?: string | null;
+  reservation_consumed?: number;
   created_at: string;
+};
+
+export type ReservationStatus = "actief" | "voltooid" | "opgeheven";
+
+export type Reservation = {
+  id: string;
+  article_id: string;
+  article_number: string;
+  article_description: string;
+  project: string;
+  quantity: number;
+  original_quantity: number;
+  consumed_quantity: number;
+  note: string;
+  status: ReservationStatus;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+};
+
+export type ReservationEvent = {
+  id: string;
+  action: "aangemaakt" | "gewijzigd" | "afgeboekt" | "opgeheven" | "voltooid";
+  quantity_before: number;
+  quantity_after: number;
+  project: string;
+  note: string;
+  changes: string;
+  user_name: string;
+  created_at: string;
+};
+
+export const RESERVATION_STATUS_LABELS: Record<ReservationStatus, string> = {
+  actief: "Actief",
+  voltooid: "Voltooid",
+  opgeheven: "Opgeheven",
 };
 
 export type Dashboard = {

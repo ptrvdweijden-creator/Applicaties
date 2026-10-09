@@ -24,6 +24,12 @@ Nederlandstalige mobiele voorraadbeheer-app voor ±300 artikelen douchebeslag: a
 - SVG-barcode per artikel (Emergent Object Storage), met aparte barcodewaarde (in barcodes, uniek); vervangen/verwijderen; scan toont overeenkomst-banner
 - Nieuw veld Artikelnaam (optioneel) in artikelformulier
 
+## Iteratie 3 (okt 2026) – Projectreserveringen
+- reservations + reservation_events (onveranderlijke historie); articles.reserved_stock atomisch bijgehouden; beschikbaar = fysiek − gereserveerd
+- Alleen admin: aanmaken/wijzigen/opheffen/voltooien (backend 403 voor anderen); iedereen mag bekijken
+- Afboeken optioneel op reservering: fysiek daalt, reservering daalt, beschikbaar niet dubbel; vrij afboeken beperkt tot beschikbaar
+- UI: sectie Reserveringen op artikeldetail, segment Reserveringen in Mutaties-tab, projectkeuze in afboeken-sheet
+
 ## Backlog
 - P1: CSV/Excel-import artikelen; projecten + reserveringen; wachtwoord wijzigen
 - P2: inkomende bestellingen, verbruiksanalyse, besteladvies bij lange levertijden, export mutaties

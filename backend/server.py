@@ -4,7 +4,8 @@ Datamodel (uitbreidbaar):
 - users: gebruikers met rol (admin / magazijn / monteur)
 - articles: artikelstam; artikelnummer uniek en onwijzigbaar; barcodes uniek over alle artikelen
 - mutations: onveranderlijk grootboek van voorraadmutaties (nooit overschreven/verwijderd)
-- projects / reservations: voorbereid voor fase 2; gereserveerde voorraad = som actieve reserveringen
+- reservations: projectreserveringen (admin); articles.reserved_stock = som open aantallen; beschikbaar = fysiek - gereserveerd
+- reservation_events: onveranderlijke reserveringshistorie
 """
 import io
 import os
@@ -152,6 +153,8 @@ class Article(BaseDocument):
     barcodes: List[str] = []
     unit: str = "stuks"
     physical_stock: int = 0
+    # Som van open aantallen van actieve reserveringen; atomisch bijgehouden (fysiek - gereserveerd = beschikbaar)
+    reserved_stock: int = 0
     min_stock: int = 0
     notes: str = ""
     active: bool = True
@@ -182,6 +185,45 @@ class Mutation(BaseDocument):
     user_name: str
     note: str = ""
     project_id: Optional[PyObjectId] = None  # toekomstige koppeling aan project
+    reservation_id: Optional[PyObjectId] = None  # afboeking op een projectreservering
+    project: Optional[str] = None
+    reservation_consumed: int = 0  # aantal waarmee de reservering is verminderd
+    created_at: datetime = Field(default_factory=now)
+
+
+ReservationStatus = Literal["actief", "voltooid", "opgeheven"]
+
+
+class Reservation(BaseDocument):
+    client_request_id: str
+    article_id: PyObjectId
+    article_number: str
+    article_description: str
+    project: str
+    quantity: int  # nog openstaand gereserveerd aantal
+    original_quantity: int
+    consumed_quantity: int = 0  # al afgeboekt op deze reservering
+    note: str = ""
+    status: ReservationStatus = "actief"
+    created_by: str
+    created_at: datetime = Field(default_factory=now)
+    updated_at: datetime = Field(default_factory=now)
+    closed_at: Optional[datetime] = None
+
+
+class ReservationEvent(BaseDocument):
+    """Onveranderlijke historie per reservering."""
+    reservation_id: PyObjectId
+    article_id: PyObjectId
+    action: Literal["aangemaakt", "gewijzigd", "afgeboekt", "opgeheven", "voltooid"]
+    quantity_before: int
+    quantity_after: int
+    project: str
+    note: str = ""
+    changes: str = ""
+    mutation_id: Optional[PyObjectId] = None
+    user_id: PyObjectId
+    user_name: str
     created_at: datetime = Field(default_factory=now)
 
 
@@ -275,6 +317,34 @@ class MutationIn(BaseModel):
     type: MutationType
     quantity: int = Field(ge=0, le=100000)
     note: str = Field(default="", max_length=500)
+    reservation_id: Optional[str] = None  # alleen bij afboeken voor een project
+
+
+class ReservationCreateIn(BaseModel):
+    client_request_id: str = Field(min_length=8, max_length=80)
+    article_id: str
+    project: str = Field(min_length=1, max_length=100)
+    quantity: int = Field(ge=1, le=100000)
+    note: str = Field(default="", max_length=500)
+
+    @field_validator("project")
+    @classmethod
+    def _p(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Verplicht veld")
+        return v
+
+
+class ReservationUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    quantity: Optional[int] = Field(default=None, ge=1, le=100000)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class ReservationCloseIn(BaseModel):
+    note: str = Field(default="", max_length=500)
 
 
 # ---------------------------------------------------------------- Auth
@@ -357,16 +427,7 @@ async def update_user(user_id: str, data: UserUpdateIn, admin: User = Depends(re
 
 
 # ---------------------------------------------------------------- Articles
-async def reserved_map(article_ids: List[ObjectId]) -> dict:
-    """Gereserveerde voorraad per artikel (actieve reserveringen). Fase 2: projectreserveringen."""
-    rows = await db.reservations.aggregate([
-        {"$match": {"article_id": {"$in": article_ids}, "status": "actief"}},
-        {"$group": {"_id": "$article_id", "qty": {"$sum": "$quantity"}}},
-    ]).to_list(None)
-    return {str(r["_id"]): r["qty"] for r in rows}
-
-
-def article_out(a: Article, reserved: int = 0) -> dict:
+def article_out(a: Article) -> dict:
     d = a.model_dump()
     d.pop("created_at", None)
     d.pop("import_batch", None)
@@ -375,16 +436,13 @@ def article_out(a: Article, reserved: int = 0) -> dict:
         d["barcode_svg"] = {"filename": svg["filename"], "barcode_value": svg["barcode_value"], "size": svg["size"],
                             "version": svg["path"], "uploaded_at": svg["uploaded_at"].isoformat()}
     d["updated_at"] = a.updated_at.isoformat()
-    d["reserved_stock"] = reserved
-    d["available_stock"] = a.physical_stock - reserved
+    d["available_stock"] = a.physical_stock - a.reserved_stock
     d["below_min"] = a.physical_stock < a.min_stock
     return d
 
 
 async def articles_out(docs: List[dict]) -> List[dict]:
-    arts = [Article.from_mongo(d) for d in docs]
-    res = await reserved_map([ObjectId(a.id) for a in arts])
-    return [article_out(a, res.get(a.id, 0)) for a in arts]
+    return [article_out(Article.from_mongo(d)) for d in docs]
 
 
 async def ensure_barcodes_free(barcodes: List[str], exclude_id: Optional[str] = None):
@@ -783,6 +841,8 @@ async def book_mutation(data: MutationIn, user: User) -> dict:
         raise HTTPException(403, "Onvoldoende rechten voor dit mutatietype")
     if data.type != "correctie" and data.quantity <= 0:
         raise HTTPException(422, "Aantal moet groter zijn dan 0")
+    if data.reservation_id and data.type != "afboeken":
+        raise HTTPException(422, "Een reservering kan alleen bij afboeken worden gekozen")
     art_doc = await db.articles.find_one({"_id": oid(data.article_id)})
     if not art_doc:
         raise HTTPException(404, "Artikel niet gevonden")
@@ -818,12 +878,44 @@ async def book_mutation(data: MutationIn, user: User) -> dict:
                                                       return_document=ReturnDocument.AFTER)
     elif data.type == "afboeken":
         delta = -data.quantity
-        after = await db.articles.find_one_and_update({"_id": aid, "physical_stock": {"$gte": data.quantity}},
-                                                      {"$inc": {"physical_stock": delta}, "$set": {"updated_at": now()}},
-                                                      return_document=ReturnDocument.AFTER)
+        consume = 0
+        res_doc = None
+        if data.reservation_id:
+            res_doc = await db.reservations.find_one({"_id": oid(data.reservation_id), "article_id": art.id})
+            if not res_doc or res_doc["status"] != "actief":
+                await reject("Reservering niet gevonden of niet meer actief")
+            consume = min(data.quantity, res_doc["quantity"])
+            await db.mutations.update_one({"_id": mid}, {"$set": {"reservation_id": data.reservation_id, "project": res_doc["project"]}})
+        # Atomisch: fysiek >= aantal én het deel buiten de reservering past binnen de beschikbare voorraad
+        after = await db.articles.find_one_and_update(
+            {"_id": aid, "physical_stock": {"$gte": data.quantity},
+             "$expr": {"$gte": [{"$subtract": ["$physical_stock", "$reserved_stock"]}, data.quantity - consume]}},
+            {"$inc": {"physical_stock": delta, "reserved_stock": -consume}, "$set": {"updated_at": now()}},
+            return_document=ReturnDocument.AFTER)
         if not after:
-            cur = await db.articles.find_one({"_id": aid}, {"physical_stock": 1})
-            await reject(f"Onvoldoende voorraad: {cur['physical_stock']} {art.unit} beschikbaar, {data.quantity} gevraagd")
+            cur = await db.articles.find_one({"_id": aid}, {"physical_stock": 1, "reserved_stock": 1})
+            avail = cur["physical_stock"] - cur.get("reserved_stock", 0)
+            if cur["physical_stock"] < data.quantity:
+                await reject(f"Onvoldoende voorraad: {cur['physical_stock']} {art.unit} fysiek aanwezig, {data.quantity} gevraagd")
+            extra = f" (waarvan {consume} uit de reservering)" if consume else ""
+            await reject(f"Onvoldoende beschikbare voorraad: {max(avail, 0)} {art.unit} beschikbaar, "
+                         f"{cur.get('reserved_stock', 0)} gereserveerd voor projecten. Gevraagd: {data.quantity}{extra}. "
+                         "Boek af op de juiste projectreservering of laat de admin de reservering aanpassen.")
+        if consume:
+            r_after = await db.reservations.find_one_and_update(
+                {"_id": res_doc["_id"], "status": "actief", "quantity": {"$gte": consume}},
+                {"$inc": {"quantity": -consume, "consumed_quantity": consume}, "$set": {"updated_at": now()}},
+                return_document=ReturnDocument.AFTER)
+            if not r_after:  # reservering gelijktijdig gewijzigd: voorraadwijziging terugdraaien
+                await db.articles.update_one({"_id": aid}, {"$inc": {"physical_stock": data.quantity, "reserved_stock": consume}})
+                await reject("Reservering werd gelijktijdig gewijzigd. Probeer het opnieuw.")
+            if r_after["quantity"] == 0:
+                await db.reservations.update_one({"_id": res_doc["_id"], "quantity": 0, "status": "actief"},
+                                                 {"$set": {"status": "voltooid", "closed_at": now()}})
+            await log_reservation_event(Reservation.from_mongo(r_after), "afgeboekt", r_after["quantity"] + consume, r_after["quantity"], user,
+                                        note=data.note.strip(), mutation_id=str(mid),
+                                        changes=f"{consume} afgeboekt" + (" — reservering volledig afgeboekt" if r_after["quantity"] == 0 else ""))
+            await db.mutations.update_one({"_id": mid}, {"$set": {"reservation_consumed": consume}})
     else:  # correctie: getelde voorraad wordt nieuwe stand; optimistische lock op huidige stand
         for _ in range(5):
             cur = await db.articles.find_one({"_id": aid}, {"physical_stock": 1})
@@ -865,6 +957,175 @@ async def list_mutations(
     return [mutation_out(Mutation.from_mongo(d)) for d in docs]
 
 
+# ---------------------------------------------------------------- Reserveringen (alleen admin mag wijzigen)
+def reservation_out(r: Reservation) -> dict:
+    d = r.model_dump()
+    d.pop("client_request_id", None)
+    for k in ("created_at", "updated_at", "closed_at"):
+        d[k] = d[k].isoformat() if d[k] else None
+    return d
+
+
+def event_out(e: ReservationEvent) -> dict:
+    d = e.model_dump()
+    d["created_at"] = e.created_at.isoformat()
+    return d
+
+
+async def log_reservation_event(r: Reservation, action: str, before: int, after: int, user: User, note: str = "",
+                                changes: str = "", mutation_id: Optional[str] = None):
+    await db.reservation_events.insert_one(ReservationEvent(
+        reservation_id=r.id, article_id=r.article_id, action=action, quantity_before=before, quantity_after=after,
+        project=r.project, note=note, changes=changes, mutation_id=mutation_id, user_id=user.id, user_name=user.name).to_mongo())
+
+
+async def reserve_stock(article_id: str, qty: int, unit: str):
+    """Verhoogt gereserveerd atomisch, alleen als beschikbaar (fysiek - gereserveerd) voldoende is."""
+    ok = await db.articles.find_one_and_update(
+        {"_id": ObjectId(article_id), "$expr": {"$gte": [{"$subtract": ["$physical_stock", "$reserved_stock"]}, qty]}},
+        {"$inc": {"reserved_stock": qty}, "$set": {"updated_at": now()}})
+    if not ok:
+        cur = await db.articles.find_one({"_id": ObjectId(article_id)}, {"physical_stock": 1, "reserved_stock": 1})
+        avail = cur["physical_stock"] - cur.get("reserved_stock", 0)
+        raise HTTPException(409, f"Onvoldoende beschikbare voorraad: {max(avail, 0)} {unit} beschikbaar "
+                                 f"(fysiek {cur['physical_stock']}, gereserveerd {cur.get('reserved_stock', 0)}), {qty} extra gevraagd")
+
+
+async def get_active_reservation(reservation_id: str) -> Reservation:
+    doc = await db.reservations.find_one({"_id": oid(reservation_id)})
+    if not doc:
+        raise HTTPException(404, "Reservering niet gevonden")
+    r = Reservation.from_mongo(doc)
+    if r.status != "actief":
+        raise HTTPException(409, f"Reservering is al {r.status} en kan niet meer worden gewijzigd")
+    return r
+
+
+@api.get("/reservations")
+async def list_reservations(
+    article_id: str = "",
+    status: Literal["actief", "afgesloten", "alle"] = "actief",
+    q: str = "",
+    limit: int = Query(200, le=1000),
+    _: User = Depends(current_user),
+):
+    filt: dict[str, Any] = {}
+    if article_id:
+        filt["article_id"] = article_id
+    if status == "actief":
+        filt["status"] = "actief"
+    elif status == "afgesloten":
+        filt["status"] = {"$in": ["voltooid", "opgeheven"]}
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        filt["$or"] = [{"project": rx}, {"article_number": rx}, {"article_description": rx}]
+    docs = await db.reservations.find(filt).sort("created_at", -1).to_list(limit)
+    return [reservation_out(Reservation.from_mongo(d)) for d in docs]
+
+
+@api.get("/reservations/projects")
+async def reservation_projects(_: User = Depends(current_user)):
+    return sorted(await db.reservations.distinct("project", {"status": "actief"}))
+
+
+@api.get("/reservations/{reservation_id}")
+async def get_reservation(reservation_id: str, _: User = Depends(current_user)):
+    doc = await db.reservations.find_one({"_id": oid(reservation_id)})
+    if not doc:
+        raise HTTPException(404, "Reservering niet gevonden")
+    events = await db.reservation_events.find({"reservation_id": reservation_id}).sort("created_at", -1).to_list(200)
+    return {**reservation_out(Reservation.from_mongo(doc)), "events": [event_out(ReservationEvent.from_mongo(e)) for e in events]}
+
+
+@api.post("/reservations", status_code=201)
+async def create_reservation(data: ReservationCreateIn, user: User = Depends(require_roles("admin"))):
+    existing = await db.reservations.find_one({"client_request_id": data.client_request_id})
+    if existing:  # dubbel verzonden: zelfde reservering teruggeven
+        return reservation_out(Reservation.from_mongo(existing))
+    art_doc = await db.articles.find_one({"_id": oid(data.article_id)})
+    if not art_doc:
+        raise HTTPException(404, "Artikel niet gevonden")
+    art = Article.from_mongo(art_doc)
+    if not art.active:
+        raise HTTPException(400, "Artikel is inactief; reserveren is niet mogelijk")
+    await reserve_stock(art.id, data.quantity, art.unit)
+    r = Reservation(client_request_id=data.client_request_id, article_id=art.id, article_number=art.article_number,
+                    article_description=art.title, project=data.project, quantity=data.quantity,
+                    original_quantity=data.quantity, note=data.note.strip(), created_by=user.name)
+    try:
+        res = await db.reservations.insert_one(r.to_mongo())
+    except DuplicateKeyError:
+        await db.articles.update_one({"_id": ObjectId(art.id)}, {"$inc": {"reserved_stock": -data.quantity}})
+        return reservation_out(Reservation.from_mongo(await db.reservations.find_one({"client_request_id": data.client_request_id})))
+    r.id = str(res.inserted_id)
+    await log_reservation_event(r, "aangemaakt", 0, r.quantity, user, note=r.note, changes=f"{r.quantity} gereserveerd voor {r.project}")
+    return reservation_out(r)
+
+
+@api.patch("/reservations/{reservation_id}")
+async def update_reservation(reservation_id: str, data: ReservationUpdateIn, user: User = Depends(require_roles("admin"))):
+    r = await get_active_reservation(reservation_id)
+    upd: dict[str, Any] = {}
+    changes = []
+    if data.project is not None and data.project.strip() != r.project:
+        if not data.project.strip():
+            raise HTTPException(422, "Project mag niet leeg zijn")
+        upd["project"] = data.project.strip()
+        changes.append(f"project '{r.project}' → '{upd['project']}'")
+    if data.note is not None and data.note.strip() != r.note:
+        upd["note"] = data.note.strip()
+        changes.append("opmerking gewijzigd")
+    delta = 0
+    if data.quantity is not None and data.quantity != r.quantity:
+        delta = data.quantity - r.quantity
+        upd["quantity"] = data.quantity
+        changes.append(f"aantal {r.quantity} → {data.quantity}")
+    if not upd:
+        raise HTTPException(400, "Geen wijzigingen")
+    art_doc = await db.articles.find_one({"_id": ObjectId(r.article_id)}, {"unit": 1})
+    if delta > 0:
+        await reserve_stock(r.article_id, delta, art_doc["unit"])
+    upd["updated_at"] = now()
+    doc = await db.reservations.find_one_and_update({"_id": ObjectId(r.id), "status": "actief", "quantity": r.quantity},
+                                                    {"$set": upd}, return_document=ReturnDocument.AFTER)
+    if not doc:
+        if delta > 0:
+            await db.articles.update_one({"_id": ObjectId(r.article_id)}, {"$inc": {"reserved_stock": -delta}})
+        raise HTTPException(409, "Reservering werd gelijktijdig gewijzigd. Vernieuw en probeer opnieuw.")
+    if delta < 0:
+        await db.articles.update_one({"_id": ObjectId(r.article_id)}, {"$inc": {"reserved_stock": delta}, "$set": {"updated_at": now()}})
+    new = Reservation.from_mongo(doc)
+    await log_reservation_event(new, "gewijzigd", r.quantity, new.quantity, user, note=new.note, changes="; ".join(changes))
+    return reservation_out(new)
+
+
+async def close_reservation(reservation_id: str, status: str, note: str, user: User) -> dict:
+    r = await get_active_reservation(reservation_id)
+    doc = await db.reservations.find_one_and_update(
+        {"_id": ObjectId(r.id), "status": "actief", "quantity": r.quantity},
+        {"$set": {"status": status, "quantity": 0, "updated_at": now(), "closed_at": now()}},
+        return_document=ReturnDocument.AFTER)
+    if not doc:
+        raise HTTPException(409, "Reservering werd gelijktijdig gewijzigd. Vernieuw en probeer opnieuw.")
+    if r.quantity:
+        await db.articles.update_one({"_id": ObjectId(r.article_id)}, {"$inc": {"reserved_stock": -r.quantity}, "$set": {"updated_at": now()}})
+    new = Reservation.from_mongo(doc)
+    action = "opgeheven" if status == "opgeheven" else "voltooid"
+    await log_reservation_event(new, action, r.quantity, 0, user, note=note.strip(),
+                                changes=f"{r.quantity} vrijgegeven naar beschikbare voorraad" if r.quantity else "")
+    return reservation_out(new)
+
+
+@api.post("/reservations/{reservation_id}/release")
+async def release_reservation(reservation_id: str, data: ReservationCloseIn, user: User = Depends(require_roles("admin"))):
+    return await close_reservation(reservation_id, "opgeheven", data.note, user)
+
+
+@api.post("/reservations/{reservation_id}/complete")
+async def complete_reservation(reservation_id: str, data: ReservationCloseIn, user: User = Depends(require_roles("admin"))):
+    return await close_reservation(reservation_id, "voltooid", data.note, user)
+
+
 # ---------------------------------------------------------------- Dashboard
 @api.get("/dashboard")
 async def dashboard(_: User = Depends(current_user)):
@@ -895,6 +1156,9 @@ async def startup():
     await db.mutations.create_index([("article_id", 1), ("created_at", -1)])
     await db.mutations.create_index([("status", 1), ("created_at", -1)])
     await db.reservations.create_index([("article_id", 1), ("status", 1)])
+    await db.reservations.create_index("client_request_id", unique=True, partialFilterExpression={"client_request_id": {"$type": "string"}})
+    await db.reservation_events.create_index([("reservation_id", 1), ("created_at", -1)])
+    await db.articles.update_many({"reserved_stock": {"$exists": False}}, {"$set": {"reserved_stock": 0}})
 
     seed_users = [
         (os.environ["ADMIN_EMAIL"], os.environ["ADMIN_PASSWORD"], "Beheerder", "admin"),

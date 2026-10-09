@@ -10,9 +10,10 @@ import { api, errorMessage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { BarcodeSvgSection } from "@/src/components/BarcodeSvg";
 import { MutationSheet } from "@/src/components/MutationSheet";
+import { ReservationRow, ReservationSheet } from "@/src/components/Reservations";
 import { Badge, Button, MutationRow, SectionTitle, StateView } from "@/src/components/ui";
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
-import { Article, articleTitle, Mutation } from "@/src/types";
+import { Article, articleTitle, Mutation, Reservation } from "@/src/types";
 
 export default function ArticleDetail() {
   const { id, scanned } = useLocalSearchParams<{ id: string; scanned?: string }>();
@@ -22,6 +23,8 @@ export default function ArticleDetail() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [sheet, setSheet] = useState(false);
+  const [resSheet, setResSheet] = useState<{ open: boolean; id: string | null }>({ open: false, id: null });
+  const reservations = useQuery({ queryKey: ["reservations", "article", id], queryFn: () => api<Reservation[]>(`/reservations?article_id=${id}&status=actief`) });
 
   const art = useQuery({ queryKey: ["article", id], queryFn: () => api<Article>(`/articles/${id}`) });
   const hist = useQuery({ queryKey: ["mutations", "article", id], queryFn: () => api<Mutation[]>(`/mutations?article_id=${id}&limit=30`) });
@@ -55,7 +58,7 @@ export default function ArticleDetail() {
         <>
           <ScrollView
             contentContainerStyle={[styles.inner, { paddingBottom: spacing.xl }]}
-            refreshControl={<RefreshControl refreshing={art.isRefetching} onRefresh={() => { art.refetch(); hist.refetch(); }} tintColor={colors.brandPrimary} />}
+            refreshControl={<RefreshControl refreshing={art.isRefetching} onRefresh={() => { art.refetch(); hist.refetch(); reservations.refetch(); }} tintColor={colors.brandPrimary} />}
           >
             <Animated.View entering={FadeInDown.duration(250)} style={styles.top}>
               <View style={styles.tags}>
@@ -111,7 +114,31 @@ export default function ArticleDetail() {
                 <Text style={styles.stockUnit}>{a.unit}</Text>
               </View>
             </Animated.View>
-            <Text style={styles.reserveNote}>Reserveringen voor projecten volgen in een latere fase.</Text>
+            {a.available_stock < 0 && (
+              <Text style={[styles.reserveNote, { color: colors.error }]} testID="article-negative-available">
+                Let op: er is meer gereserveerd dan fysiek aanwezig. Pas de reserveringen aan.
+              </Text>
+            )}
+
+            <SectionTitle
+              title="Reserveringen voor projecten"
+              action={
+                isAdmin && a.active ? (
+                  <Pressable testID="article-reserve-button" onPress={() => setResSheet({ open: true, id: null })} hitSlop={8}>
+                    <Text style={{ color: colors.brandPrimary, fontWeight: "600", fontSize: fontSize.base }}>+ Reserveren</Text>
+                  </Pressable>
+                ) : null
+              }
+            />
+            <View style={styles.card} testID="article-reservations">
+              {reservations.isLoading ? (
+                <ActivityIndicator style={{ margin: spacing.xl }} color={colors.brandPrimary} />
+              ) : (reservations.data ?? []).length === 0 ? (
+                <StateView icon="bookmark-outline" title="Geen actieve reserveringen" />
+              ) : (
+                reservations.data!.map((r) => <ReservationRow key={r.id} r={r} showArticle={false} onPress={() => setResSheet({ open: true, id: r.id })} />)
+              )}
+            </View>
 
             <SectionTitle title="Gegevens" />
             <View style={styles.card}>
@@ -146,6 +173,7 @@ export default function ArticleDetail() {
             </View>
           )}
           <MutationSheet article={a} visible={sheet} onClose={() => setSheet(false)} />
+          <ReservationSheet article={a} reservationId={resSheet.id} visible={resSheet.open} onClose={() => setResSheet({ open: false, id: null })} />
         </>
       )}
     </View>

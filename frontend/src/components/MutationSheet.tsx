@@ -1,5 +1,5 @@
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useEffect, useState } from "react";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
@@ -7,11 +7,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, errorMessage } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Button, IconName, Input } from "@/src/components/ui";
+import { Button, Chip, IconName, Input } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { hapticError, hapticLight, hapticSuccess } from "@/src/haptics";
 import { fontSize, makeStyles, mono, radius, spacing, useTheme } from "@/src/theme";
-import { Article, articleTitle, MUTATION_ICONS, MUTATION_LABELS, MutationType, newRequestId } from "@/src/types";
+import { Article, articleTitle, MUTATION_ICONS, MUTATION_LABELS, MutationType, newRequestId, Reservation } from "@/src/types";
 
 const TYPES: MutationType[] = ["afboeken", "ontvangst", "retour", "correctie"];
 const HINTS: Record<MutationType, string> = {
@@ -36,6 +36,14 @@ export function MutationSheet({ article, visible, onClose }: { article: Article;
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [requestId, setRequestId] = useState(newRequestId());
+  const [reservationId, setReservationId] = useState<string | null>(null);
+  const reservations = useQuery({
+    queryKey: ["reservations", "article", article.id],
+    queryFn: () => api<Reservation[]>(`/reservations?article_id=${article.id}&status=actief`),
+    enabled: visible,
+  });
+  const activeRes = reservations.data ?? [];
+  const selectedRes = activeRes.find((r) => r.id === reservationId) ?? null;
 
   useEffect(() => {
     if (visible) {
@@ -44,6 +52,7 @@ export function MutationSheet({ article, visible, onClose }: { article: Article;
       setNote("");
       setError(null);
       setRequestId(newRequestId());
+      setReservationId(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -77,6 +86,17 @@ export function MutationSheet({ article, visible, onClose }: { article: Article;
       setError(type === "correctie" ? "Voer een geldig aantal in (0 of hoger)" : "Voer een geldig aantal in (minimaal 1)");
       return;
     }
+    if (type === "afboeken") {
+      const fromReservation = selectedRes ? Math.min(n, selectedRes.quantity) : 0;
+      if (n - fromReservation > article.available_stock && n <= article.physical_stock) {
+        hapticError();
+        setError(
+          `Onvoldoende beschikbare voorraad: ${Math.max(article.available_stock, 0)} ${article.unit} beschikbaar, ${article.reserved_stock} gereserveerd voor projecten.` +
+            (activeRes.length ? " Kies hieronder het project waarvoor u afboekt." : ""),
+        );
+        return;
+      }
+    }
     if (newStock !== null && newStock < 0) {
       setError(`Onvoldoende voorraad: er zijn ${article.physical_stock} ${article.unit} op voorraad`);
       hapticError();
@@ -91,7 +111,7 @@ export function MutationSheet({ article, visible, onClose }: { article: Article;
     try {
       await api("/mutations", {
         method: "POST",
-        body: { client_request_id: requestId, article_id: article.id, type, quantity: n, note },
+        body: { client_request_id: requestId, article_id: article.id, type, quantity: n, note, reservation_id: type === "afboeken" ? reservationId : null },
       });
       hapticSuccess();
       toast(`${MUTATION_LABELS[type]} geboekt voor ${article.article_number}`);
@@ -143,6 +163,23 @@ export function MutationSheet({ article, visible, onClose }: { article: Article;
               })}
             </View>
             <Text style={styles.hint}>{HINTS[type]}</Text>
+
+            {type === "afboeken" && activeRes.length > 0 && (
+              <View style={{ gap: spacing.sm }} testID="mutation-reservation-picker">
+                <Text style={styles.label}>Afboeken voor project</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }} keyboardShouldPersistTaps="handled">
+                  <Chip testID="mutation-reservation-none" label="Geen (vrije voorraad)" selected={!reservationId} onPress={() => { setReservationId(null); setError(null); }} />
+                  {activeRes.map((r) => (
+                    <Chip key={r.id} testID={`mutation-reservation-${r.id}`} label={`${r.project} (${r.quantity})`} selected={reservationId === r.id} onPress={() => { setReservationId(r.id); setError(null); }} />
+                  ))}
+                </ScrollView>
+                <Text style={styles.hint}>
+                  {selectedRes
+                    ? `Reservering ${selectedRes.project} wordt verminderd met ${isNaN(n) ? 0 : Math.min(n, selectedRes.quantity)}`
+                    : `Vrij beschikbaar: ${article.available_stock} ${article.unit} (${article.reserved_stock} gereserveerd)`}
+                </Text>
+              </View>
+            )}
 
             <View style={{ gap: spacing.sm }}>
               <Text style={styles.label}>{type === "correctie" ? "Getelde voorraad" : "Aantal"} ({article.unit})</Text>
