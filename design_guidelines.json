@@ -1,0 +1,170 @@
+{
+  "app_name": "Douchebeslag Voorraad",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "Professional, clean, and highly readable iOS-native interface prioritizing stock management efficiency for mechanics and warehouse staff.",
+  "color": {
+    "surface": "#F8FAFC",
+    "onSurface": "#0F172A",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1E293B",
+    "surfaceTertiary": "#F1F5F9",
+    "onSurfaceTertiary": "#334155",
+    "surfaceInverse": "#0F172A",
+    "onSurfaceInverse": "#F8FAFC",
+    "brand": "#1E3A5F",
+    "onBrand": "#FFFFFF",
+    "brandPrimary": "#1E3A5F",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#64748B",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E2E8F0",
+    "onBrandTertiary": "#0F172A",
+    "success": "#10B981",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F59E0B",
+    "onWarning": "#FFFFFF",
+    "error": "#EF4444",
+    "onError": "#FFFFFF",
+    "info": "#3B82F6",
+    "onInfo": "#FFFFFF",
+    "border": "#E2E8F0",
+    "borderStrong": "#CBD5E1",
+    "divider": "#F1F5F9",
+    "muted": "#64748B"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room for readability, but compact enough to view multiple articles. Minimum 44x44pt touch targets.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Bottom tab bar",
+      "Sticky headers over scrolling article lists",
+      "Bottom sheet drag handles and headers"
+    ],
+    "dont's": [
+      "Article list rows",
+      "Form inputs",
+      "Data metric cards"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Secure authentication for staff with email/password.",
+      "states": {
+        "loading": "Centered spinner over the login button",
+        "empty": "N/A",
+        "error": "Inline error text below password input, shake animation on form"
+      },
+      "layout": "Hero image background with heavy dark blue gradient scrim. Solid surface secondary card at the bottom 40% housing the login form. Clean inputs, large sticky login CTA."
+    },
+    {
+      "name": "Dashboard",
+      "purpose": "Quick overview of active items, low stock warnings, and recent activity.",
+      "states": {
+        "loading": "Skeleton loaders for stat cards and recent mutations list",
+        "empty": "No recent mutations: 'Geen recente activiteit' illustration",
+        "error": "Error loading dashboard data: 'Kon gegevens niet laden' + Retry button"
+      },
+      "layout": "Top section: User greeting and Role badge. Middle: 2-column grid for metrics ('Actieve artikelen', 'Onder minimum'). Bottom: Stacked list for 'Recente mutaties'. FAB for quick scan."
+    },
+    {
+      "name": "Artikelen",
+      "purpose": "Comprehensive searchable and filterable list of all shower fittings.",
+      "states": {
+        "loading": "List of skeleton rows",
+        "empty": "Illustration + 'Geen artikelen gevonden. Probeer een andere zoekterm.'",
+        "error": "Error state with retry CTA"
+      },
+      "layout": "Sticky header with Search bar and horizontal scrollable Category chips (brandTertiary tint). List of articles below. Each row uses Monospace font for SKU, clear description, and pill indicator for stock level."
+    },
+    {
+      "name": "Artikel Detail",
+      "purpose": "Detailed view of a single item's stock levels and metadata.",
+      "states": {
+        "loading": "Skeleton view of the layout",
+        "empty": "N/A",
+        "error": "Error loading article details + Retry"
+      },
+      "layout": "Top header with item title and category tag. 3-column grid for stock cards (Fysiek, Gereserveerd, Beschikbaar). List of metadata (SKU, barcode, unit, notes). Sticky bottom container with 'Mutatie toevoegen' CTA opening a Bottom Sheet."
+    },
+    {
+      "name": "Scannen",
+      "purpose": "Fast barcode/QR scanning to immediately locate an article.",
+      "states": {
+        "loading": "Camera initializing spinner",
+        "empty": "No camera permission -> prompt to open settings",
+        "error": "Unknown barcode -> 'Onbekende barcode' alert with 'Koppel aan artikel' CTA"
+      },
+      "layout": "Full-bleed camera view. Dark transparent scrim (70% opacity) with a clear square/rectangular cutout in the center framed by corner brackets. Floating torch/flashlight toggle in bottom corner. Instruction text: 'Richt de camera op de barcode'."
+    }
+  ],
+  "images": {
+    "login_hero": {
+      "url": "https://images.unsplash.com/photo-1584384689201-e0bcbe2c7f1d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwxfHxnbGFzcyUyMHRleHR1cmUlMjBiYWNrZ3JvdW5kJTIwbGlnaHR8ZW58MHx8fHwxNzkxNTMzNDEzfDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1584384689201-e0bcbe2c7f1d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwxfHxnbGFzcyUyMHRleHR1cmUlMjBiYWNrZ3JvdW5kJTIwbGlnaHR8ZW58MHx8fHwxNzkxNTMzNDEzfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Frosted glass texture background"
+    },
+    "profile_header_bg": {
+      "url": "https://images.unsplash.com/photo-1587293852726-70cdb56c2866?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHx3YXJlaG91c2UlMjBpbnZlbnRvcnklMjBtYW5hZ2VtZW50JTIwbWluaW1hbHxlbnwwfHx8fDE3OTE1MzM0MTN8MA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1587293852726-70cdb56c2866?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHx3YXJlaG91c2UlMjBpbnZlbnRvcnklMjBtYW5hZ2VtZW50JTIwbWluaW1hbHxlbnwwfHx8fDE3OTE1MzM0MTN8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimal warehouse inventory background"
+    }
+  },
+  "haptics": {
+    "button_press": "light",
+    "tab_switch": "light",
+    "stock_mutation_stepper": "light",
+    "scan_success": "success",
+    "scan_error": "error",
+    "mutation_confirm": "success"
+  },
+  "instructions_to_main_agent": [
+    "Data Density & Typography: Use a Monospace font variant (e.g., Space Grotesk, JetBrains Mono, or system mono) for all article SKUs (artikelnummers), barcodes, and stock count numbers. This ensures numerical data aligns cleanly and looks professional in lists.",
+    "Scanner UI: Implement a full-screen camera view with a dark overlay scrim (approx 60-70% opacity). Cut out a clear rectangle in the center with 4 corner bracket icons to guide the user. Add a floating FAB in the bottom right for the flashlight toggle.",
+    "Mutation Workflow: Keep stock mutations (Ontvangst, Afboeken, Retour, Correctie) within a @gorhom/bottom-sheet on the Article Detail screen. Use a segmented control to select the mutation type and a large +/- stepper for quantity to prevent manual typing errors.",
+    "Color Usage: Use the requested dark blue ('brand': #1E3A5F) for primary actions and headers, paired with slate grey ('brandSecondary': #64748B) for secondary information. Emphasize low stock (Onder minimum) using the 'warning' or 'error' tokens.",
+    "Navigation: Implement bottom tabs (Dashboard, Artikelen, Scannen, Mutaties). Use the top header space for user profile access and displaying their current role (Beheerder / Magazijn / Monteur).",
+    "Empty/Error States: Ensure every list (Articles, Mutations) has a clear empty state with an icon and text (e.g., 'Geen artikelen gevonden'). Include inline haptics (success/error) for scanning and saving mutations."
+  ]
+}

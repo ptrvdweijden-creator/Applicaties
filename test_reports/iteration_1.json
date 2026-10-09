@@ -1,0 +1,33 @@
+{
+  "summary": "First test run of Dutch Douchebeslag inventory app (Expo + FastAPI). Backend: 32/32 pytest tests PASS covering auth, role gates (monteur/magazijn/admin), articles CRUD, duplicate article_number+barcode (409), by-barcode known/unknown, PATCH immutability of article_number, barcode linking admin-only + duplicate rejection, mutations (afboeken over-stock -> 409 with stock unchanged, idempotency via client_request_id, correctie sets stock+delta, 10-way concurrency never goes negative - exactly 5x201 + 5x409), dashboard & users CRUD, deactivated user cannot login. Frontend (390x844 mobile): admin login + dashboard metrics (26 actieve / 5 onder minimum / 34 mutaties-24u) rendering; dashboard search Enter navigates to /artikelen?q=glasklem with 4 results; below-min metric filters list; article detail shows Fysiek/Gereserveerd/Beschikbaar; MutationSheet admin shows all 4 types, booking retour +2 updates stock, large afboeken shows duidelijke foutmelding (\"Onvoldoende voorraad: er zijn 12 stuks op voorraad\"); artikel-form creates TEST artikel with initial_stock -> ontvangst mutation shown in historie; edit view hides article_number as editable input (shown as read-only text + help). Scannen tab manual input: unknown barcode shows Onbekende-barcode-paneel + admin ziet 'Koppel aan bestaand artikel' knop -> koppel screen -> link-article-DB-1003 + link-confirm-button -> toast 'Barcode gekoppeld aan DB-1003' + nieuwe barcode zichtbaar; known barcode (8712345000011/028) navigeert naar artikeldetail. Monteur login: geen Nieuw-knop op /artikelen, geen Bewerken op detail, MutationSheet toont uitsluitend Afboeken+Retour (ontvangst/correctie verborgen), geen koppel-knop op onbekende barcode. Admin gebruikersbeheer screen opent met users + active-switches. All deprecated-expo-package checks: none found. No React Native red screen, no console errors. Overall: 32/32 backend + 100% requested frontend flows pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "No fixes required. All PRD-level flows (auth, RBAC, articles, barcodes, mutations incl. concurrency+idempotency, dashboard, scan + koppel, users) verified end-to-end on backend and mobile UI."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 234: bare `except Exception` is caught in auth; acceptable but masks pymongo InvalidId; consider narrowing to (InvalidTokenError, bson.errors.InvalidId, KeyError).",
+    "PATCH /api/articles accepts extra fields like article_number without 422 (silently ignored because Pydantic model excludes it) - works but could be hardened with ConfigDict(extra='forbid').",
+    "Backend uses deprecated @app.on_event('startup' / 'shutdown') - FastAPI recommends lifespan context managers. Not breaking but worth migrating."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_backend_api.py (new)"
+  ],
+  "success_rate": {"backend": "100% (32/32)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "Created several TEST-prefixed articles via API (TEST-CA-*, TEST-LB-*, TEST-AF-*, TEST-ID-*, TEST-CO-*, TEST-CN-*) and one TEST-UI-* via frontend form. One TEST monteur user (test_*@test.local) created+deactivated via API. Seed demo data (20 articles DB-1001..DB-6003) untouched except: DB-1001 physical_stock was adjusted via UI mutation sheet (admin booked retour +2, so DB-1001 is now 38 instead of 40; also afboeken 3 during monteur earlier). DB-1003 now has an extra TESTBC... barcode linked.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend tests at /app/backend/tests/test_backend_api.py are idempotent (each test creates its own TEST- article). Frontend testIDs verified: form-article-number-input / form-description-input / form-category-input / form-min-stock-input / form-initial-stock-input / form-save-button for artikel-form; mutation-type-{afboeken|ontvangst|retour|correctie}, mutation-qty-input, mutation-submit-button, mutation-error for MutationSheet; scan-manual-input, scan-manual-submit, scan-unknown-title, scan-link-barcode-button for Scannen; link-article-{article_number}, link-confirm-button for Koppel. Dashboard search submits only on Enter (onSubmitEditing), not on each keystroke.",
+  "rca_of_issue": "N/A - no bugs found."
+}
