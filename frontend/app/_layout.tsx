@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
-import { useEffect } from "react";
-import { LogBox } from "react-native";
+import React, { useEffect } from "react";
+import { LogBox, Platform, View } from "react-native";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -56,6 +56,58 @@ function AuthGate() {
   );
 }
 
+// Op brede browserschermen (desktop) de app gecentreerd met maximale breedte tonen; native ongewijzigd
+const WEB_MAX_WIDTH = 1100;
+
+// PWA-tags ook in dev-preview zetten (daar wordt +html.tsx niet gebruikt)
+const PWA_TAGS: [string, Record<string, string>][] = [
+  ["link", { rel: "manifest", href: "/manifest.json" }],
+  ["link", { rel: "apple-touch-icon", href: "/apple-touch-icon.png" }],
+  ["meta", { name: "theme-color", content: "#1E3A5F" }],
+  ["meta", { name: "apple-mobile-web-app-capable", content: "yes" }],
+  ["meta", { name: "mobile-web-app-capable", content: "yes" }],
+  ["meta", { name: "apple-mobile-web-app-title", content: "Voorraad" }],
+];
+
+function usePwaHead() {
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    document.documentElement.lang = "nl";
+    document.title = "Douchebeslag Voorraad";
+    for (const [tag, attrs] of PWA_TAGS) {
+      const key = attrs.rel ? `rel="${attrs.rel}"` : `name="${attrs.name}"`;
+      if (document.head.querySelector(`${tag}[${key}]`)) continue;
+      const el = document.createElement(tag);
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      document.head.appendChild(el);
+    }
+  }, []);
+}
+
+function WebFrame({ children }: { children: React.ReactNode }) {
+  const { colors } = useTheme();
+  usePwaHead();
+  if (Platform.OS !== "web") return <>{children}</>;
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.surfaceTertiary, alignItems: "center" }}>
+      <View
+        style={{
+          flex: 1,
+          width: "100%",
+          maxWidth: WEB_MAX_WIDTH,
+          backgroundColor: colors.surface,
+          borderLeftWidth: 1,
+          borderRightWidth: 1,
+          borderColor: colors.border,
+          overflow: "hidden",
+        }}
+      >
+        {children}
+      </View>
+    </View>
+  );
+}
+
 export default function RootLayout() {
   return (
     <ErrorBoundary>
@@ -64,7 +116,9 @@ export default function RootLayout() {
           <KeyboardProvider>
             <AuthProvider>
               <ToastProvider>
-                <AuthGate />
+                <WebFrame>
+                  <AuthGate />
+                </WebFrame>
               </ToastProvider>
             </AuthProvider>
           </KeyboardProvider>

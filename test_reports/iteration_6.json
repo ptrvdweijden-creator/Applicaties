@@ -1,0 +1,52 @@
+{
+  "summary": "Frontend-only test of web layout (WebFrame) + PWA assets for Dutch inventory Expo app. Desktop (1440x900): login + 5 tabs (Dashboard, Artikelen, Scannen, Mutaties, Planning) all render centered inside a 1100px frame with 170px side gutters, no layout breakage, no console errors. Article detail (/artikel/<id>) and artikel-form open as stack screens with a visible header + back arrow and navigate correctly. Mobile viewport (390x844): WebFrame no-ops and the inner frame equals viewport width (390px, left=0) — no regression. Scannen tab shows camera-permission card + manual barcode input (no crash). PWA assets: /manifest.json (200, valid JSON, name 'Douchebeslag Voorraad'), /icon-192.png (200), /icon-512.png (200), /apple-touch-icon.png (200) all serve correctly. HOWEVER: the HTML head served from Metro dev (bundle URL contains dev=true) does NOT include <link rel=manifest>, <link rel=apple-touch-icon>, <meta theme-color> or lang='nl' — the +html.tsx file is only applied during a static web export (expo export -p web), not in the dev preview. For PWA installability on the preview URL, the app must be exported.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "pwa_findings": {
+    "manifest_json": "200 OK, Content-Type application/json, valid JSON with name='Douchebeslag Voorraad', theme_color #1E3A5F, icons 192/512 referenced",
+    "icon_192": "200 OK, image/png, 34542 bytes",
+    "icon_512": "200 OK, image/png, 318353 bytes",
+    "apple_touch_icon": "200 OK, image/png, 31014 bytes",
+    "html_head_manifest_link": "MISSING on the dev-served preview — +html.tsx is only used by `expo export -p web`. On the live preview the served HTML head only has charset/viewport/title/<style id=expo-reset>. No <link rel=manifest>, no <link rel=apple-touch-icon>, no theme-color meta, lang='en' instead of 'nl'. PWA won't install from the preview URL until a static web build is deployed."
+  },
+  "web_layout_findings": {
+    "desktop_1440x900": "WebFrame inner width=1100px, left=170, right=170 — centered correctly on login AND all authenticated tabs (verified post-login).",
+    "mobile_390x844": "WebFrame inner width=390px, left=0 — fills full viewport, no horizontal gutters, no regression.",
+    "tabs_desktop": "All 5 tabs navigate OK: /, /artikelen, /scannen, /mutaties, /planning. Tab bar visible and usable. No red screen.",
+    "stack_screens_desktop": "/artikel/<id> and /artikel-form render with header bar showing title and ← back arrow (header styling from Stack.screenOptions is applied).",
+    "scannen_tab": "Shows 'Camera gebruiken om te scannen' card with 'Camera toestaan' button + 'Scannen lukt niet? Voer de barcode handmatig in' manual input. No crash. Camera permission flow not functionally testable headless (as noted in request)."
+  },
+  "test_report_links": [
+    "/app/test_reports/screens/01_desktop_login.png",
+    "/app/test_reports/screens/03_desktop_after_login.png",
+    "/app/test_reports/screens/tab_Dashboard.png",
+    "/app/test_reports/screens/tab_Artikelen.png",
+    "/app/test_reports/screens/tab_Scannen.png",
+    "/app/test_reports/screens/tab_Mutaties.png",
+    "/app/test_reports/screens/tab_Planning.png",
+    "/app/test_reports/screens/article_detail.png",
+    "/app/test_reports/screens/artikel_form.png",
+    "/app/test_reports/screens/mobile_dashboard.png"
+  ],
+  "action_items": [
+    "+html.tsx is NOT applied by Metro dev server (bundle URL shows dev=true). The custom <head> (manifest link, apple-touch-icon, theme-color, lang='nl', apple-mobile-web-app-* metas) will only reach the browser after a static web export (expo export -p web) is deployed. For PWA installability on the current preview URL, consider either (a) switching the preview deployment to a built static output, or (b) injecting the required <link>/<meta> tags via a mechanism that also works in dev — e.g., a public/index.html if supported, or adding them via DOM in app/_layout.tsx when Platform.OS==='web' as a dev-only fallback.",
+    "Minor: the dev-served HTML has lang='en'; after static export this will become 'nl' via +html.tsx. No code change needed if export is deployed."
+  ],
+  "critical_code_review_comments": [
+    "WebFrame in _layout.tsx is clean, guarded by Platform.OS==='web', uses theme colors, overflow hidden — no concerns.",
+    "manifest.json is minimal but valid; purpose 'any' on 512 is fine; consider adding a maskable icon for better Android install UX (nice-to-have, not required).",
+    "+html.tsx uses // @ts-nocheck — acceptable since the file is only used by Expo Router's static renderer and typings for +html can be awkward."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not in scope — frontend-only)", "frontend": "90% (layout + assets fully OK; PWA head meta not applied in dev preview)"},
+  "seed_data_creation": "Created temporary admin user weblayout_tester@test.local in MongoDB (pwdlib hash, role=admin, active=true, must_change_password=false) for login testing. Deleted after tests (verified: deleted=1).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "If retesting PWA installability: the Metro dev server currently serves a fallback HTML template that ignores +html.tsx. Verify by curl'ing the preview root and checking for <link rel=\"manifest\">. If still missing, the deployment is still Metro dev. Use test user pattern @test.local as described in /app/memory/test_credentials.md. WebFrame renders inside the SafeAreaProvider so it is tested at the top of the tree.",
+  "rca_of_issue": "Root cause of missing manifest link in HTML head: Expo Router's app/+html.tsx file is only consumed when running the static renderer (expo export -p web, or during Server/Static output modes at request time). In Metro dev mode (`expo start --web`), the HTML template is produced by @expo/metro-runtime which emits a minimal boilerplate (charset/viewport/title/expo-reset style). This is a known Expo behavior; nothing is wrong with the +html.tsx content itself — it is correct and will take effect once the app is built with `expo export -p web` and that static output is what the preview URL serves."
+}

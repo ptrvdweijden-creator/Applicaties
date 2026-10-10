@@ -45,3 +45,10 @@ Nederlandstalige mobiele voorraadbeheer-app voor ±300 artikelen douchebeslag: a
 ## Backlog
 - P1: CSV/Excel-import artikelen; projecten + reserveringen; wachtwoord wijzigen
 - P2: inkomende bestellingen, verbruiksanalyse, besteladvies bij lange levertijden, export mutaties
+
+## Webversie (okt 2026)
+- Zelfde Expo-codebase draait als web-app (React Native Web). Backend/DB ongewijzigd.
+- Web-only WebFrame in app/_layout.tsx: gecentreerd, max 1100px op desktop; native ongewijzigd.
+- PWA: public/manifest.json + iconen; head-tags via +html.tsx (export) en runtime-injectie (dev).
+- Camerascannen op web via expo-camera web (barcode-detector polyfill), vereist HTTPS; zaklamp niet op web.
+- TODO bij publicatie: productie-webadres toevoegen aan CORS_ORIGINS in backend/.env.
